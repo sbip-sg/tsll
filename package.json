@@ -1,0 +1,43 @@
+{
+  "name": "tslah",
+  "version": "1.0.0",
+  "description": "LLVM frontend for TypeScript",
+  "main": "./lib/src/cli.js",
+  "scripts": {
+    "start": "node ./lib/cli.js",
+    "build": "rm -rf ./lib && npx tsc -p ./tsconfig.json",
+    "test": "npx jest --coverage"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lung21/tslah.git"
+  },
+  "keywords": [
+    "LLVM",
+    "Compiler",
+    "TypeScript",
+    "SBIP"
+  ],
+  "author": "SBIP (Singapore Blockchain Innovation Program)",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/lung21/tslah/issues"
+  },
+  "homepage": "https://github.com/lung21/tslah#readme",
+  "engines": {
+    "node": ">=14.17.3",
+    "npm": ">=6.14.13"
+  },
+  "devDependencies": {
+    "@types/jest": "^26.0.24",
+    "@types/yargs": "^17.0.2",
+    "jest": "^27.0.6",
+    "ts-jest": "^27.0.4",
+    "typescript": "^4.3.5"
+  },
+  "dependencies": {
+    "@types/node": "^16.4.0",
+    "llvm-node": "^3.0.0",
+    "yargs": "^17.0.1"
+  }
+}
