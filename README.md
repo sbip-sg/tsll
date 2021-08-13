@@ -10,13 +10,14 @@ Work in progress
 For those who would like to develop this project together, please check out below.
 
 #### **Prerequisite**
-Follow the steps to build the source code in [LLVM project](https://github.com/llvm/llvm-project). I highly recommend using the build tool [Ninja](https://ninja-build.org/) as it is fast and simple. Below are a few first steps you could start from.
+Follow the steps to build the source code in [LLVM project](https://github.com/llvm/llvm-project). I highly recommend using the build tool [Ninja](https://ninja-build.org/) as it is fast and simple. Below are a few steps you could start from.
 
-1. Clone the LLVM project repository
-`git clone https://github.com/llvm/llvm-project.git`
-2. Choose a tag to checkout into a branch by running `git tag -l` and `git checkout tags/<tag>`
-3. `cd llvm-project` and generate Ninja build metadata by running `cmake -S llvm -B build -G ninja`
-4. `ninja` to start building your LLVM version
+1. Clone the LLVM project repository and enter the project  directory via
+`git clone https://github.com/llvm/llvm-project.git` and
+`cd llvm-project`
+2. Choose a tag from the list and check out into a branch by running `git tag -l` and `git checkout tags/<tag>` (Replace `<tag>` for with your tag choice)
+3. Generate Ninja build files with `cmake -S llvm -B build -G Ninja`
+4. `cmake --build build` to start building your LLVM from the Ninja build files (This may take a while)
 
 Note that we use LLVM 11.0.0 (llvmorg-11.0.0) to convert Typescript to LLVM Intermediate Representation in this project so you might want to build this LLVM version for compatibility purposes.
 
