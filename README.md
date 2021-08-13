@@ -23,7 +23,9 @@ Note that we use LLVM 11.0.0 (llvmorg-11.0.0) to convert Typescript to LLVM Inte
 
 After it is successfully built, the final step is to run the following simple command to download all the dependencies, and you are good to contribute.
 
-`npm install `
+```
+npm install
+```
 
 ## Code Style
 This project is developed generally with [Typescript style guide](https://google.github.io/styleguide/tsguide.html) to attain better maintainability and readability.
