@@ -1,9 +1,9 @@
 import ts from 'typescript';
 import { SyntaxNotSupportedError, InstantiateError, VariableUndefinedError } from '../../common/error';
 import { Builder } from '../ir/builder';
-import { isBasicBlock, isGlobalVariable, isValue, Type, Value, BasicBlock } from '../ir/types';
+import { isBasicBlock, isGlobalVariable, isValue, Type, Value, BasicBlock, isAllocaInst } from '../ir/types';
 import { Scope } from '../../common/scope';
-import { isString, FunctionLikeDeclaration } from '../../common/types'
+import { isString, FunctionLikeDeclaration, Property } from '../../common/types'
 
 export class Visitor {
 
@@ -32,7 +32,7 @@ export class Visitor {
         if (!scope.has(entryFunctionName)) {
             let entryFunction = this.builder.buildFunction(entryFunctionName, this.builder.buildVoidType(), [], []);
             scope.set(entryFunction.name, entryFunction);
-            scope.enter('Main', entryFunction);
+            scope.enter('', entryFunction);
         }
 
         for (let statement of sourceFile.statements) {
@@ -67,27 +67,47 @@ export class Visitor {
             return anyValue;
         }
 
-        let currentFunction = scope.getCurrentFunction();
+        if (variableDeclaration.type === undefined) throw new SyntaxNotSupportedError();
+        if (ts.isArrayTypeNode(variableDeclaration.type)) {
+            let type = this.visitArrayTypeNode(variableDeclaration.type);
+            scope.setNextType(type);
+        } else {
+            let type = this.visitTypeNode(variableDeclaration.type)
+            scope.setNextType(type);
+        }
+
         let expressionValue = this.visitExpression(variableDeclaration.initializer, scope);
 
         if (isString(expressionValue)) {
             let allocaValue = scope.get(expressionValue);
-            let loadValue = this.builder.buildLoad(expressionValue, allocaValue);
-            allocaValue = this.builder.buildAlloca(name, loadValue, currentFunction);
-            this.builder.buildStore(loadValue, allocaValue);
-            return loadValue;
+            let loadValue = this.builder.buildLoad(allocaValue);
+            let newAllocaValue = this.builder.buildAlloca(loadValue.type, name);
+            this.builder.buildStore(loadValue, newAllocaValue);
+            scope.set(name, newAllocaValue)
+            return allocaValue;
+        }
+
+        if (isAllocaInst(expressionValue)) {
+            // Rename the value
+            expressionValue.name = name;
+            scope.set(name, expressionValue);
+            return expressionValue;
         }
 
         if (scope.isModuleScope()) {
-            let moduleVal = this.builder.buildGlobalVariable(name, expressionValue);
+            let moduleVal = this.builder.buildGlobalVariable(expressionValue, name);
             scope.set(name, moduleVal);
+            return moduleVal;
         } else {
-            let allocaValue = this.builder.buildAlloca(name, expressionValue, currentFunction);
+            let allocaValue = this.builder.buildAlloca(expressionValue.type, name);
             this.builder.buildStore(expressionValue, allocaValue);
             scope.set(name, allocaValue);
+            return allocaValue;
         }
+    }
 
-        return expressionValue;
+    public visitArrayTypeNode(arrayTypeNode: ts.ArrayTypeNode) {
+        return this.visitTypeNode(arrayTypeNode.elementType);
     }
 
     public visitIfStatement(ifStatement: ts.IfStatement, scope: Scope) {
@@ -99,16 +119,16 @@ export class Visitor {
         let currentFunction = scope.getCurrentFunction();
 
         // Create all the basic blocks at once
-        let thenBlock = this.builder.buildBasicBlock('then', currentFunction);
-        let elseBlock = this.builder.buildBasicBlock('else', currentFunction);
-        let endBlock = this.builder.buildBasicBlock('end', currentFunction);
+        let thenBlock = this.builder.buildBasicBlock(currentFunction, 'then');
+        let elseBlock = this.builder.buildBasicBlock(currentFunction, 'else');
+        let endBlock = this.builder.buildBasicBlock(currentFunction, 'end');
 
         this.builder.buildConditionBranch(condition, thenBlock, elseBlock);
 
         let values: Value[] = [];
         let blocks: BasicBlock[] = [];
         // Set an insertion point from 'then' basicblock
-        this.builder.setEntryBlock(thenBlock);
+        this.builder.setCurrentBlock(thenBlock);
         scope.enter('If');
         let thenVal = this.visitStatement(ifStatement.thenStatement, scope);
         this.builder.buildBranch(endBlock);
@@ -120,7 +140,7 @@ export class Visitor {
         
         if (ifStatement.elseStatement !== undefined) {
             scope.enter('Else');
-            this.builder.setEntryBlock(elseBlock);
+            this.builder.setCurrentBlock(elseBlock);
             let elseVal = this.visitStatement(ifStatement.elseStatement, scope);
             this.builder.buildBranch(endBlock);
             scope.leave();
@@ -130,7 +150,7 @@ export class Visitor {
             }
         }
 
-        this.builder.setEntryBlock(endBlock);
+        this.builder.setCurrentBlock(endBlock);
         if (values.length > 0) {
             let ph = this.builder.buildPHINode(values, blocks);
             this.builder.buildReturn(ph);
@@ -160,56 +180,42 @@ export class Visitor {
 
     public visitFunctionLikeDeclaration(functionLikeDeclaration: FunctionLikeDeclaration, scope: Scope) {
 
-        let functionName: string;
-        let returnType: Type;
-
         if (functionLikeDeclaration.name === undefined || !ts.isIdentifier(functionLikeDeclaration.name)) throw new SyntaxNotSupportedError();
-        functionName = functionLikeDeclaration.name.text;
-
-        returnType = this.visitTypeNode(functionLikeDeclaration.type);
-
+        if (functionLikeDeclaration.type === undefined) throw new SyntaxNotSupportedError();
+        
+        let returnType = this.visitTypeNode(functionLikeDeclaration.type);
+        let functionName = functionLikeDeclaration.name.text;
         let parameterTypes: Type[] = [];
         let parameterNames: string[] = [];
-        let initializedNames: string[] = [];
-        let initializedValues: Value[] = [];
+        let defaultValues = new Map<string, Value>();
 
         for (let parameter of functionLikeDeclaration.parameters) {
 
-            let parameterName: string;
-            if (parameter.name !== undefined) {
-                parameterName = this.visitBindingName(parameter.name, scope) as string;
-                parameterNames.push(parameterName);
-            } else {
-                throw new SyntaxNotSupportedError();
-            }
+            let parameterName = this.visitBindingName(parameter.name, scope);
+            parameterNames.push(parameterName);
             
             if (parameter.initializer !== undefined) {
-                let val = this.visitExpression(parameter.initializer, scope) as Value;
-                initializedNames.push(parameterName);
-                initializedValues.push(val);
+                let visited = this.visitExpression(parameter.initializer, scope);
+                let parameterValue = this.resolveNameDefinition(visited, scope);
+                defaultValues.set(parameterName, parameterValue);
             }
-            
-            parameterTypes.push(this.visitTypeNode(parameter.type));
+
+            if (parameter.type === undefined) throw new SyntaxNotSupportedError();
+            let parameterType = this.visitTypeNode(parameter.type);
+            parameterTypes.push(parameterType);
         }
 
         let currentScopeName = scope.getCurrentScopeName();
-        let fn = this.builder.buildFunction(`${currentScopeName}_${functionName}`, returnType, parameterTypes, parameterNames);
+        scope.setDefaultValues(`${currentScopeName}${functionName}`, defaultValues);
+
+        let fn = this.builder.buildFunction(`${currentScopeName}${functionName}`, returnType, parameterTypes, parameterNames);
         scope.enter(functionName, fn);
-
+        
+        // In the current scope, initialize the parameter names of a function with the arguments received from a caller
         for (let i = 0; i < parameterNames.length; i++) {
-            let allocaValue = this.builder.buildAlloca(parameterNames[i], fn.getArguments()[i], fn);
-            scope.set(parameterNames[i], allocaValue);
-        }
-
-        for (let i = 0; i < parameterNames.length; i++) {
-            let allocaValue = scope.get(parameterNames[i]);
-            this.builder.buildStore(fn.getArguments()[i], allocaValue);
-        }
-
-        // Initialize the parameters with the given arguments
-        for (let i = 0; i < initializedNames.length; i++) {
-            let allocaValue = scope.get(initializedNames[i]);
-            this.builder.buildStore(initializedValues[i], allocaValue);
+            let newAlloca = this.builder.buildAlloca(parameterTypes[i]);
+            this.builder.buildStore(fn.getArguments()[i], newAlloca);
+            scope.set(parameterNames[i], newAlloca);
         }
 
         let returnValue: Value | undefined;
@@ -220,10 +226,11 @@ export class Visitor {
 
         // Return to the last scope
         scope.leave(fn);
+
         let currentFunction = scope.getCurrentFunction();
-        let entryBlock = currentFunction.getEntryBlock();
-        if (!isBasicBlock(entryBlock)) throw new SyntaxNotSupportedError();
-        this.builder.setEntryBlock(entryBlock);
+        let currentBlock = currentFunction.getEntryBlock();
+        if (!isBasicBlock(currentBlock)) throw new SyntaxNotSupportedError();
+        this.builder.setCurrentBlock(currentBlock);
 
         return fn;
     }
@@ -241,28 +248,22 @@ export class Visitor {
         for (let argument of callExpression.arguments) {
             let expressionValue = this.visitExpression(argument, scope);
 
-            let value: Value;
-            if (isString(expressionValue)) {
-                let allocaValue = scope.get(expressionValue);
-                value = this.builder.buildLoad(expressionValue, allocaValue);
-            } else {
-                value = expressionValue;
-            }
+            let value = this.resolveNameDefinition(expressionValue, scope);
 
             values.push(value);
         }
 
-        return this.builder.buildFunctionCall(name, values);
+        let defaultValues = scope.getDefaultValues(name);
+
+        return this.builder.buildFunctionCall(name, values, defaultValues);
     }
 
     public visitBlock(block: ts.Block, scope: Scope) {
-        scope.enter('Block');
         // Capture the return value of the return statement
         let returnValue: Value | undefined;
         for (let statement of block.statements) {
             returnValue = this.visitStatement(statement, scope);
         }
-        scope.leave();
         return returnValue;
     }
 
@@ -286,7 +287,7 @@ export class Visitor {
         let returnValue = this.visitExpression(returnStatement.expression, scope);
         if (isString(returnValue)) {
             let allocaValue = scope.get(returnValue);
-            return this.builder.buildLoad(returnValue, allocaValue);
+            return this.builder.buildLoad(allocaValue);
         } else {
             return returnValue;
         }
@@ -304,8 +305,32 @@ export class Visitor {
         if (ts.isBinaryExpression(expression)) return this.visitBinaryExpression(expression, scope);
         // if (ts.isObjectLiteralExpression(expression)) return this.visitObjectLiteralExpression(expression, scope);
         if (ts.isPropertyAccessExpression(expression)) return this.visitPropertyAccessExpression(expression, scope);
-        // if (ts.isNewExpression(expression)) return this.visitNewExpression(expression, scope);
+        // if (ts.isElementAccessExpression(expression)) return this.visitElementAccessExpression(expression, scope);
+        if (ts.isNewExpression(expression)) return this.visitNewExpression(expression, scope);
+        if (ts.isArrayLiteralExpression(expression)) return this.visitArrayLiteralExpression(expression, scope);
         throw new SyntaxNotSupportedError();
+    }
+
+    public visitArrayLiteralExpression(arrayLiteralExpression: ts.ArrayLiteralExpression, scope: Scope) {
+
+        let elementType = scope.getNextType();
+        let arrayLen = arrayLiteralExpression.elements.length;
+
+        // Allocate memory space of a specific size
+        let arrayType = this.builder.buildArrayType(elementType, arrayLen);
+        let allocaValue = this.builder.buildAlloca(arrayType);
+
+        // Store each value into the allocated array of memory
+        for (let i = 0; i < arrayLen; i++) {
+            let visited = this.visitExpression(arrayLiteralExpression.elements[i], scope);
+            let value = this.resolveNameDefinition(visited , scope);
+            let firstValue = this.builder.buildInteger(0, 64);
+            let secondValue =this.builder.buildInteger(i, 64);
+            let ptrValue = this.builder.buildAccessPtr(allocaValue, firstValue, secondValue);
+            this.builder.buildStore(value, ptrValue);
+        }
+
+        return allocaValue;
     }
 
     public visitFunctionExpression(functionExpression: ts.FunctionExpression, scope: Scope) {
@@ -313,7 +338,34 @@ export class Visitor {
     }
 
     public visitNewExpression(newExpression: ts.NewExpression, scope: Scope) {
-        throw new SyntaxNotSupportedError();
+        let visited = this.visitExpression(newExpression.expression, scope);
+        
+        let structType = this.builder.getStructType(visited as string);
+
+        let allocaValue = this.builder.buildAlloca(structType, structType.name);
+
+        let defaultValues = scope.getDefaultValues(`${structType.name}_Constructor`);
+
+
+        // TODO: Match the parameters of a constructor with the arguments given for class instantiation
+        if (newExpression.arguments === undefined) {
+            this.builder.buildFunctionCall(`${structType.name}_Constructor`, [], defaultValues);
+        
+        } else {
+
+            // First argument of any member function calls is always a pointer to a struct type
+            // In this case, we are creating a class instance using the new operator, and calling an appropriate constructor
+            let values: Value[] = [allocaValue];
+            for (let argument of newExpression.arguments) {
+                let visitedArg = this.visitExpression(argument, scope);
+                let value = this.resolveNameDefinition(visitedArg, scope);
+                values.push(value);
+            }
+
+            this.builder.buildFunctionCall(`${structType.name}_Constructor`, values, defaultValues);
+        }
+
+        return allocaValue;
     }
 
     public visitObjectLiteralExpression(objectLiteralExpression: ts.ObjectLiteralExpression, scope: Scope) {
@@ -378,17 +430,20 @@ export class Visitor {
 
     public visitPropertyAccessExpression(propertyAccessExpression: ts.PropertyAccessExpression, scope: Scope) {
 
-        let propertyValues: Value[] = [];
+        let visited = this.visitExpression(propertyAccessExpression.expression, scope);
+        // Find the name and value
+        let allocaValue = this.resolveNameDefinition(visited, scope);
+        if (!allocaValue.type.isStructTy() || !isString(allocaValue.type.name)) throw new SyntaxNotSupportedError();
+        
+        // Find the index of a specific name defined in the structure
+        let idx = scope.indexInStruct(allocaValue.type.name, propertyAccessExpression.name.text);
+        let firstValue = this.builder.buildInteger(0, 32);
+        let secondValue = this.builder.buildInteger(idx, 32);
+        return this.builder.buildAccessPtr(allocaValue, firstValue, secondValue);
+    }
 
-        while (ts.isPropertyAccessExpression(propertyAccessExpression.expression)) {
-            let propertyName = this.visitPropertyName(propertyAccessExpression.expression.name, scope);
-            let value = scope.get(propertyName);
-            propertyValues.push(value);
-        }
-
-        let currentMethod = scope.getCurrentFunction();
-        let propertyPtr = this.builder.buildPropertyPtr(currentMethod, propertyValues);
-        return this.builder.buildLoad('', propertyPtr);
+    public visitElementAccessExpression(elementAccessExpression: ts.ElementAccessExpression, scope: Scope) {
+        throw new Error('Method not implemented.');
     }
 
     public visitIdentifier(identifier: ts.Identifier, scope: Scope) {
@@ -405,10 +460,7 @@ export class Visitor {
         return this.builder.buildNumber(num);
     }
 
-    public visitTypeNode(typeNode?: ts.TypeNode) {
-
-        if (typeNode === undefined) return this.builder.buildVoidType();
-
+    public visitTypeNode(typeNode: ts.TypeNode) {
         switch (typeNode.kind) {
             case ts.SyntaxKind.NumberKeyword:
                 return this.builder.buildNumberType();
@@ -419,7 +471,6 @@ export class Visitor {
             case ts.SyntaxKind.BooleanKeyword:
                 return this.builder.buildBooleanType();
             case ts.SyntaxKind.AnyKeyword:
-                return this.builder.buildAnyType();
             default:
                 throw new SyntaxNotSupportedError();
         }
@@ -431,56 +482,62 @@ export class Visitor {
         
         scope.enter(className);
 
-        let memberTypes: Type[] = [];
-        let memberMethods: ts.MethodDeclaration[] = [];
-        let constructor: ts.ConstructorDeclaration | undefined;
+        let propertyDeclarations: ts.PropertyDeclaration[] = [];
+        let methodDeclarations: ts.MethodDeclaration[] = [];
+        let constructorDeclarations: ts.ConstructorDeclaration[] = [];
         for (let member of classDeclaration.members) {
-            if (ts.isPropertyDeclaration(member)) {
-                let memberType = this.visitPropertyDeclaration(member, scope);
-                memberTypes.push(memberType);
-            } else if (ts.isConstructorDeclaration(member)) {
-                constructor = member;
-            } else if (ts.isMethodDeclaration(member)) {
-                memberMethods.push(member);
-            } else {
-                throw new SyntaxNotSupportedError();
-            }
+            if (ts.isPropertyDeclaration(member)) propertyDeclarations.push(member);
+            if (ts.isMethodDeclaration(member)) methodDeclarations.push(member);
+            if (ts.isConstructorDeclaration(member)) constructorDeclarations.push(member);
         }
 
-        // Build a struct type with the class name and its members
-        this.builder.buildStructType(className, memberTypes);
+        let propertyTypes: Type[] = [];
+        for (let propertyDeclaration of propertyDeclarations) {
+            let property = this.visitPropertyDeclaration(propertyDeclaration, scope);
+            propertyTypes.push(property.propertyType);
+        }
 
-        if (constructor === undefined) {
-            let method = this.builder.buildDefaultConstructor(className);
-            let methodBlock = this.builder.buildBasicBlock('', method);
-            this.builder.setEntryBlock(methodBlock)
+        // Build a struct type with the class name
+        this.builder.buildStructType(className);
+        // Inser property types into the struct type created above 
+        this.builder.insertPropertyType(className, ...propertyTypes);
+
+        for (let constructorDeclaration of constructorDeclarations) {
+            this.visitConstructorDeclaration(constructorDeclaration, scope);
+        }
+
+        // If no construtors are provided, create a default constructor
+        if (constructorDeclarations.length === 0) {
+            this.builder.buildConstructor(className, []);
             this.builder.buildReturn();
-        } else {
-            this.visitConstructorDeclaration(constructor, scope);
         }
 
-        // Define all the member functions
-        for (let method of memberMethods) {
-            this.visitMethodDeclaration(method, scope);
+        // Define all the class methods excluding constructors
+        for (let methodDeclaration of methodDeclarations) {
+            this.visitMethodDeclaration(methodDeclaration, scope);
         }
+
         scope.leave();
     }
 
     public visitPropertyDeclaration(propertyDeclaration: ts.PropertyDeclaration, scope: Scope) {
 
+        if (propertyDeclaration.type === undefined) throw new SyntaxNotSupportedError();
         let propertyName = this.visitPropertyName(propertyDeclaration.name, scope);
         let propertyType = this.visitTypeNode(propertyDeclaration.type);
 
-        if (propertyDeclaration.initializer !== undefined) {
-            let currentFunction = scope.getCurrentFunction();
-            let expressionValue = this.visitExpression(propertyDeclaration.initializer, scope);
-            let allocaValue = this.builder.buildAlloca(propertyName, expressionValue as Value, currentFunction);
-            this.builder.buildStore(expressionValue as Value, allocaValue);
-        } else {
-            this.builder.buildAny();
+        let property: Property = {
+            propertyName,
+            propertyType
         }
 
-        return propertyType;
+        if (propertyDeclaration.initializer !== undefined) {
+            let visited = this.visitExpression(propertyDeclaration.initializer, scope);
+            // Look for the name in the current scope
+            property.propertyValue = this.resolveNameDefinition(visited, scope);
+        }
+
+        return property;
     }
 
     public visitPropertyName(propertyName: ts.PropertyName, scope: Scope) {
@@ -489,15 +546,90 @@ export class Visitor {
     }
 
     public visitMethodDeclaration(methodDeclaration: ts.MethodDeclaration, scope: Scope) {
-        this.visitFunctionLikeDeclaration(methodDeclaration, scope);
+
+        if (methodDeclaration.type === undefined) throw new SyntaxNotSupportedError();
+        let methodName = this.visitPropertyName(methodDeclaration.name, scope);
+        let returnType = this.visitTypeNode(methodDeclaration.type);
+        let currentScopeName = scope.getCurrentScopeName();
+        let parameterTypes: Type[] = [];
+        let parameterNames: string[] = [];
+        let defaultValues = new Map<string, Value>();
+
+        for (let parameter of methodDeclaration.parameters) {
+
+            let parameterName = this.visitBindingName(parameter.name, scope);
+            parameterNames.push(parameterName);
+            
+            if (parameter.initializer !== undefined) {
+                let visited = this.visitExpression(parameter.initializer, scope);
+                let value = this.resolveNameDefinition(visited, scope);
+                defaultValues.set(parameterName, value);
+            }
+
+            if (parameter.type === undefined) throw new SyntaxNotSupportedError();
+            let parameterType = this.visitTypeNode(parameter.type);
+            parameterTypes.push(parameterType);
+        }
+
+        let fn = this.builder.buildClassMethod(`${currentScopeName}_${methodName}`, returnType, parameterTypes);
+        // Use the function name appropriately modified by LLVM
+        scope.setDefaultValues(fn.name, defaultValues);
+        // Change to a new scope
+        scope.enter(methodName, fn);
+
+        let returnValue: Value | undefined;
+        if (methodDeclaration.body !== undefined) returnValue = this.visitBlock(methodDeclaration.body, scope);
+        this.builder.buildReturn(returnValue);
+        this.builder.verifyFunction(fn);
+
+        // Return to the last scope
+        scope.leave(fn);
+        let currentFunction = scope.getCurrentFunction();
+        let currentBlock = currentFunction.getEntryBlock();
+        if (!isBasicBlock(currentBlock)) throw new SyntaxNotSupportedError();
+        this.builder.setCurrentBlock(currentBlock);
     }
 
     public visitConstructorDeclaration(constructorDeclaration: ts.ConstructorDeclaration, scope: Scope) {
-        if (constructorDeclaration.modifiers !== undefined) {
-            for (let modifier of constructorDeclaration.modifiers) {
+        
+        let currentScopeName = scope.getCurrentScopeName();
+        let parameterTypes: Type[] = [];
+        let parameterNames: string[] = [];
+        let defaultValues = new Map<string, Value>();
+
+        for (let parameter of constructorDeclaration.parameters) {
+
+            let parameterName = this.visitBindingName(parameter.name, scope);
+            parameterNames.push(parameterName);
+            
+            if (parameter.initializer !== undefined) {
+                let visited = this.visitExpression(parameter.initializer, scope);
+                let value = this.resolveNameDefinition(visited, scope);
+                defaultValues.set(parameterName, value);
             }
+
+            if (parameter.type === undefined) throw new SyntaxNotSupportedError();
+            let parameterType = this.visitTypeNode(parameter.type);
+            parameterTypes.push(parameterType);
         }
-        // this.builder.buildConstructor();
+
+        let fn = this.builder.buildConstructor(`${currentScopeName}_Constructor`, parameterTypes);
+        // Use the function name appropriately modified by LLVM
+        scope.setDefaultValues(fn.name, defaultValues);
+        // Change to a new scope
+        scope.enter('Constructor', fn);
+
+        if (constructorDeclaration.body !== undefined) this.visitBlock(constructorDeclaration.body, scope);
+        this.builder.buildReturn()
+        this.builder.verifyFunction(fn);
+
+        // Return to the last scope
+        scope.leave(fn);
+        let currentFunction = scope.getCurrentFunction();
+        let currentBlock = currentFunction.getEntryBlock();
+        if (!isBasicBlock(currentBlock)) throw new SyntaxNotSupportedError();
+        this.builder.setCurrentBlock(currentBlock);
+
     }
 
     public visitForStatement(forStatement: ts.ForStatement, scope: Scope) {
@@ -519,17 +651,17 @@ export class Visitor {
         let entryBlock = currentFunction.getEntryBlock();
         if (!isBasicBlock(entryBlock)) throw new SyntaxNotSupportedError();
         
-        let loopBlock = this.builder.buildBasicBlock('loop', currentFunction);
+        let loopBlock = this.builder.buildBasicBlock(currentFunction, 'loop');
 
         this.builder.buildBranch(loopBlock);
-        this.builder.setEntryBlock(loopBlock);
+        this.builder.setCurrentBlock(loopBlock);
 
         let phi = this.builder.buildPHINode(values, [entryBlock]);
         let returnValue = this.visitStatement(forStatement.statement, scope);
 
         let endBlock: BasicBlock | undefined;
         if (returnValue !== undefined) {
-            endBlock = this.builder.buildBasicBlock('end', currentFunction);
+            endBlock = this.builder.buildBasicBlock(currentFunction, 'end');
         }
 
         if (forStatement.incrementor !== undefined) {
@@ -551,13 +683,13 @@ export class Visitor {
         }
 
         if (returnValue !== undefined && endBlock !== undefined) {
-            this.builder.setEntryBlock(endBlock);
+            this.builder.setCurrentBlock(endBlock);
             this.builder.buildReturn(returnValue);
         }
 
         scope.leave();
         // Return back to the previous insertion block before the loop
-        this.builder.setEntryBlock(entryBlock);
+        this.builder.setCurrentBlock(entryBlock);
     }
 
     public visitForOfStatement(forOfStatement: ts.ForOfStatement, scope: Scope) {
@@ -572,11 +704,17 @@ export class Visitor {
         throw new SyntaxNotSupportedError();
     }
 
-    private resolveVariableDefinition(visited: Value | string | void | Type, scope: Scope) {
+    private resolveNameDefinition(visited: Value | string, scope: Scope) {
+        if (isString(visited) && scope.has(visited)) return scope.get(visited);
+        if (isValue(visited)) return visited;
+        throw new VariableUndefinedError();
+    }
+
+    private resolveVariableDefinition(visited: Value | string, scope: Scope) {
         if (isString(visited) && scope.has(visited)) {
             let alloca = scope.get(visited);
             if (!isGlobalVariable(alloca)) {
-                return this.builder.buildLoad(visited, alloca);
+                return this.builder.buildLoad(alloca);
             } else if (isGlobalVariable(alloca) && alloca.initializer !== undefined) {
                 return alloca.initializer;
             } else {

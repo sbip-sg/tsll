@@ -1,4 +1,4 @@
-import { Value, AllocaInst, ConstantFP, GlobalVariable, Type, Function, BasicBlock, CallInst } from "llvm-node";
+import { Value, AllocaInst, ConstantFP, GlobalVariable, Type, Function, BasicBlock, CallInst, Constant } from "llvm-node";
 
 // Re-export these classes
 export { Value, AllocaInst, ConstantFP, GlobalVariable, Type, Function, BasicBlock };
@@ -19,12 +19,16 @@ export function isAllocaInst(val: any): val is AllocaInst {
     return val instanceof AllocaInst;
 }
 
-export function isGlobalVariable(val: Value): val is GlobalVariable {
+export function isGlobalVariable(val: any): val is GlobalVariable {
     return val instanceof GlobalVariable;
 }
 
-export function isConstantFP(val: Value): val is ConstantFP {
+export function isConstantFP(val: any): val is ConstantFP {
     return val instanceof ConstantFP;
+}
+
+export function isConstant(val: any): val is Constant {
+    return val instanceof Constant;
 }
 
 export function isBasicBlock(val: any): val is BasicBlock {
