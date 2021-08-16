@@ -1,0 +1,52 @@
+name: CI
+on:
+  branches:
+    - main
+  pull_request:
+    - main
+jobs:
+  test:
+    name: Run unit tests against code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      - name: Setup npm cache
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14.17.3'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm install
+      - name: Test code changes
+        run: npm test
+  build:
+    name: Build Node artifacts
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      - name: Setup npm cache
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14.17.3'
+          cache: 'npm'
+      - name: Build a lib and bin
+        run: npm run build
+  publish:
+    name: Publish this npm project
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      - name: Setup npm cache
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14.17.3'
+          cache: 'npm'
+      - name: Publish pacakge
+        run: npm publish
+          env:
+            NODE_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
