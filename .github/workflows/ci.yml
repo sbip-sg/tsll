@@ -39,7 +39,7 @@ jobs:
           node-version: '14.17.3'
           cache: 'npm'
       - name: Install dependencies
-        run: npm install
+        run: npm install --ignore-scripts
       - name: Build a lib and bin
         run: npm run build
   publish:
@@ -55,7 +55,7 @@ jobs:
           node-version: '14.17.3'
           cache: 'npm'
       - name: Install dependencies
-        run: npm install
+        run: npm install --ignore-scripts
       - name: Publish pacakge
         run: |
           npm config set //registry.npmjs.org/:_authToken=$NPM_TOKEN
