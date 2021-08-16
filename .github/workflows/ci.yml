@@ -28,7 +28,7 @@ jobs:
         run: npm test
   publish:
     name: Publish this npm project
-    needs: build
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
