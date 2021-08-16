@@ -1,5 +1,5 @@
 {
-  "name": "tslah",
+  "name": "@lungchen/tslah",
   "version": "1.0.0",
   "description": "LLVM frontend for TypeScript",
   "main": "./lib/converter.js",
