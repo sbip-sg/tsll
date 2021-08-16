@@ -11,6 +11,8 @@ jobs:
     name: Run unit tests against code
     runs-on: ubuntu-latest
     steps:
+      - name: Install LLVM
+        run: sudo apt-get install -y llvm-11
       - name: Checkout repository
         uses: actions/checkout@v2
       - name: Setup npm cache
