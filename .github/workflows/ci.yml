@@ -1,9 +1,11 @@
 name: CI
 on:
-  branches:
-    - main
+  push:
+    branches:
+      - main
   pull_request:
-    - main
+    branches:
+      - main
 jobs:
   test:
     name: Run unit tests against code
@@ -13,9 +15,9 @@ jobs:
         uses: actions/checkout@v2
       - name: Setup npm cache
         uses: actions/setup-node@v2
-          with:
-            node-version: '14.17.3'
-            cache: 'npm'
+        with:
+          node-version: '14.17.3'
+          cache: 'npm'
       - name: Install dependencies
         run: npm install
       - name: Test code changes
@@ -29,9 +31,9 @@ jobs:
         uses: actions/checkout@v2
       - name: Setup npm cache
         uses: actions/setup-node@v2
-          with:
-            node-version: '14.17.3'
-            cache: 'npm'
+        with:
+          node-version: '14.17.3'
+          cache: 'npm'
       - name: Build a lib and bin
         run: npm run build
   publish:
@@ -43,9 +45,9 @@ jobs:
         uses: actions/checkout@v2
       - name: Setup npm cache
         uses: actions/setup-node@v2
-          with:
-            node-version: '14.17.3'
-            cache: 'npm'
+        with:
+          node-version: '14.17.3'
+          cache: 'npm'
       - name: Publish pacakge
         run: npm publish
           env:
