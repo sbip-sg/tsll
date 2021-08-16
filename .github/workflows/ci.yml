@@ -22,7 +22,7 @@ jobs:
           cache: 'npm'
       - name: Install dependencies
         run: |
-        npm config set cmake_LLVM_DIR $(/usr/bin/llvm-config-11 --cmakedir)
+        npm config set cmake_LLVM_DIR=$(/usr/local/llvm-config-11 --cmakedir)
         npm install
       - name: Test code changes
         run: npm test
