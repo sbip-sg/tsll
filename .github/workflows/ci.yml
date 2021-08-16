@@ -50,5 +50,5 @@ jobs:
           cache: 'npm'
       - name: Publish pacakge
         run: npm publish
-          env:
-            NODE_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+        env:
+          NODE_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
