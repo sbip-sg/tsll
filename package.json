@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node ./lib/cli.js",
     "build": "rm -rf ./lib && npx tsc -p ./tsconfig.json",
-    "test": "npx jest --verbose --coverage --watchAll"
+    "test": "npx jest --verbose --coverage"
   },
   "repository": {
     "type": "git",
