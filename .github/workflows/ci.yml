@@ -22,7 +22,6 @@ jobs:
           cache: 'npm'
       - name: Install dependencies
         run: |
-        echo 'Use LLVM version 11'
         npm config set cmake_LLVM_DIR=$(/usr/bin/llvm-config-11 --cmakedir)
         npm install
       - name: Test code changes
