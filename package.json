@@ -13,7 +13,6 @@
     "type": "git",
     "url": "git+https://github.com/lung21/tslah.git"
   },
-  "private": true,
   "files": [
     "lib"
   ],
