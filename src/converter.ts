@@ -12,8 +12,9 @@ export function convert(files: string[], emitIR: boolean, bitcodeOutput?: string
     for (let file of files) {
         let srcFile = program.getSourceFile(file);
         if (srcFile === undefined) continue;
-
-        let builder = new Builder(file);
+        let names = file.trim().split('/');
+        let moduleId = names[names.length - 1];
+        let builder = new Builder(moduleId);
         let scope = new Scope();
         let visitor = Visitor.getVisitor(builder);
 
