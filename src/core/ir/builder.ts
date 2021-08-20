@@ -1,5 +1,5 @@
 import llvm from 'llvm-node';
-import { DuplicateError, FunctionUndefinedError, SyntaxNotSupportedError, TypeUndefinedError, VariableUndefinedError } from "../../common/error";
+import { FunctionUndefinedError, SyntaxNotSupportedError, TypeUndefinedError } from "../../common/error";
 import { Type, Value, BasicBlock, isConstant } from "./types";
 
 export class Builder {
@@ -20,8 +20,9 @@ export class Builder {
         return globalVar;
     }
 
-    public buildAlloca(type: Type, name?: string) {
-        return this.llvmBuilder.createAlloca(type, undefined, name);
+    public buildAlloca(type: Type, size: number = 1, name?: string) {
+        let sizeValue = this.buildInteger(size, 32);
+        return this.llvmBuilder.createAlloca(type, sizeValue, name);
     }
 
     public buildStore(val: Value, alloca: Value) {
@@ -77,8 +78,8 @@ export class Builder {
         return llvm.Type.getDoubleTy(this.llvmContext);
     }
 
-    public buildStringType(): Type {
-        return llvm.ArrayType.get(llvm.Type.getInt8Ty(this.llvmContext), 2);
+    public buildStringType(size: number): Type {
+        return llvm.ArrayType.get(llvm.Type.getInt8Ty(this.llvmContext), size);
     }
 
     public buildFunctionCall(name: string, parameters: Value[], defaultValues: Map<string, Value>) {
@@ -204,7 +205,8 @@ export class Builder {
     }
 
     public buildStructType(name: string) {
-        if (this.llvmModule.getTypeByName(name) !== null) throw new DuplicateError();
+        let structType = this.llvmModule.getTypeByName(name);
+        if (name !== undefined && structType !== null) return structType;
         return llvm.StructType.create(this.llvmContext, name);
     }
 

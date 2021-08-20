@@ -1,11 +1,10 @@
 import { FunctionUndefinedError, SyntaxNotSupportedError, TypeUndefinedError, VariableUndefinedError } from "./error";
 import { Value, Function, Type } from "../core/ir/types";
-import { Unallocated } from "./types";
 
 export class Scope {
     private scopeNameArray: string[];
     private functionArray: Function[];
-    private nameTable: Map<string, Value | Unallocated>;
+    private nameTable: Map<string, Value>;
     private tableArray: Map<string, Value>[];
     private defaultMap: Map<string, Map<string, Value>>;
     private structMap: Map<string, Array<string>>;
