@@ -43,7 +43,7 @@ describe('Builder ', () => {
     it('inserts types in a struct', () => {
         builder.buildStructType('typename');
         let firstType = builder.buildStructType('struct');
-        let secondType = builder.buildStringType();
+        let secondType = builder.buildStringType(10);
         let spy = jest.spyOn(builder, 'insertPropertyType');
         builder.insertPropertyType('typename', firstType, secondType);
         expect(spy).toHaveReturned()
