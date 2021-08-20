@@ -1,0 +1,1 @@
+import urmodule from 'yourmodule';
