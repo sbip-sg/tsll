@@ -4,6 +4,8 @@ Tslah is a TypeScript frontend written in TypeScript for LLVM IR generation. For
 
 #### **Design idea**
 Tslah extracts information on Abstract Syntax Tree (AST) generated with [Typescript Compiler API](https://github.com/Microsoft/TypeScript/wiki/Using-the-Compiler-API) by visiting each node, and create instructions accordingly with [LLVM Typescript bindings](https://github.com/MichaReiser/llvm-node) to achieve the final IR generation.
+
+For more detail, go to [wiki pages](https://github.com/lung21/tslah/wiki)
 ## Install
 ```
 npm install @lungchen/tslah
@@ -42,6 +44,8 @@ A list of resources regarding LLVM and Typescript Compiler API documentation is 
 - https://github.com/microsoft/TypeScript/blob/d8e830d132a464ec63fd122ec50b1bb1781d16b7/doc/spec-ARCHIVED.md
 - https://releases.llvm.org/11.0.0/docs/LangRef.html
 - https://ts-ast-viewer.com/#
+- https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference
+- https://github.com/emlai/ts-llvm
 
 ## Disclaimer
-Work in progress
+By using this project, you agree that we as developers of tslah have no legal obligations in any form to your usage.
