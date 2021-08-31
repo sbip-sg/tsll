@@ -1,9 +1,10 @@
-import ts from 'typescript';
+import ts, { isBreakOrContinueStatement, isContinueStatement } from 'typescript';
 import { SyntaxNotSupportedError, InstantiateError, VariableUndefinedError } from '../../common/error';
 import { Builder } from '../ir/builder';
-import { isBasicBlock, isGlobalVariable, isValue, Type, Value, BasicBlock, isAllocaInst } from '../ir/types';
+import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst } from '../ir/types';
 import { Scope } from '../../common/scope';
-import { isString, FunctionLikeDeclaration, Property } from '../../common/types';
+import { isString, FunctionLikeDeclaration, Property, isStringArray, isBreak, isContinue, Break, Continue } from '../../common/types';
+import llvm, { ArrayType, ConstantInt } from 'llvm-node';
 
 export class Visitor {
 
@@ -48,7 +49,7 @@ export class Visitor {
     }
 
     public visitVariableDeclarationList(variableDeclarationList: ts.VariableDeclarationList, scope: Scope) {
-        let values: Value[] = [];
+        let values: (Value | string)[] = [];
         for (let variableDeclaration of variableDeclarationList.declarations) {
             let declarationValue = this.visitVariableDeclaration(variableDeclaration, scope);
             values.push(declarationValue);
@@ -61,20 +62,15 @@ export class Visitor {
         // Retrieve identifier names
         let name = this.visitBindingName(variableDeclaration.name, scope);
         
-        if (variableDeclaration.initializer === undefined) {
-            let anyValue = this.builder.buildAny();
-            scope.set(name, anyValue);
-            return anyValue;
-        }
-
-        // Currently we do not allow untyped variable declarations. We may ease this restriction in the future.
-        if (variableDeclaration.type === undefined) throw new SyntaxNotSupportedError();
-        if (ts.isArrayTypeNode(variableDeclaration.type)) {
-            let type = this.visitArrayTypeNode(variableDeclaration.type);
-            scope.setNextType(type);
-        } else {
-            let type = this.visitTypeNode(variableDeclaration.type)
-            scope.setNextType(type);
+        if (variableDeclaration.initializer === undefined) return name;
+        if (variableDeclaration.type !== undefined) {
+            if (ts.isArrayTypeNode(variableDeclaration.type)) {
+                let type = this.visitArrayTypeNode(variableDeclaration.type);
+                scope.setNextType(type);
+            } else {
+                let type = this.visitTypeNode(variableDeclaration.type)
+                scope.setNextType(type);
+            }
         }
 
         let visited = this.visitExpression(variableDeclaration.initializer, scope);
@@ -119,7 +115,7 @@ export class Visitor {
         let currentFunction = scope.getCurrentFunction();
         let currentBlock = this.builder.getCurrentBlock();
         if (currentBlock === undefined) throw new SyntaxNotSupportedError();
-        let endBlock = this.builder.buildBasicBlock(currentFunction, 'end');
+        let endBlock = this.builder.buildBasicBlock(currentFunction, 'if.end');
 
         while (1) {
 
@@ -128,12 +124,12 @@ export class Visitor {
             let condition = this.resolveNameDefinition(visited, scope);
 
             // elseBlock name defaults to "else"
-            let elseBlockName = 'else';
+            let elseBlockName = 'if.else';
             if (nextStatement !== undefined && ts.isIfStatement(nextStatement)) {
-                elseBlockName = 'elseif';
+                elseBlockName = 'if.elseif';
             }
 
-            let thenBlock = this.builder.buildBasicBlock(currentFunction, 'then');
+            let thenBlock = this.builder.buildBasicBlock(currentFunction, 'if.then');
             let elseBlock = this.builder.buildBasicBlock(currentFunction, elseBlockName);
             this.builder.buildConditionBranch(condition, thenBlock, elseBlock);
 
@@ -145,6 +141,10 @@ export class Visitor {
             // It means one of the statements is a return statement inside the block
             if (isValue(thenVal)) {
                 this.builder.buildReturn(thenVal);
+            } else if (isBreak(thenVal)) {
+                this.builder.buildBranch(this.builder.getLoopEndBlock());
+            } else if (isContinue(thenVal)) {
+                this.builder.buildBranch(this.builder.getLoopNextBlock())
             } else {
                 this.builder.buildBranch(endBlock);
             }
@@ -165,6 +165,10 @@ export class Visitor {
                 let elseVal = this.visitStatement(nextStatement, scope);
                 if (isValue(elseVal)) {
                     this.builder.buildReturn(elseVal);
+                } else if (isBreak(thenVal)) {
+                    this.builder.buildBranch(this.builder.getLoopEndBlock());
+                } else if (isContinue(thenVal)) {
+                    this.builder.buildBranch(this.builder.getLoopNextBlock())
                 } else {
                     this.builder.buildBranch(endBlock);
                 }
@@ -243,9 +247,11 @@ export class Visitor {
             scope.set(parameterNames[i], newAlloca);
         }
 
-        let returnValue: Value | undefined;
+        let returnValue: Value | Break | Continue | undefined;
         if (functionLikeDeclaration.body !== undefined) returnValue = this.visitBlock(functionLikeDeclaration.body, scope);
-        this.builder.buildReturn(returnValue);
+        if (returnValue === undefined || isValue(returnValue)) {
+            this.builder.buildReturn(returnValue);
+        }
 
         this.builder.verifyFunction(fn);
 
@@ -285,7 +291,7 @@ export class Visitor {
 
     public visitBlock(block: ts.Block, scope: Scope) {
         // Capture the return value of the return statement
-        let returnValue: Value | undefined;
+        let returnValue: Value | Continue | Break | undefined;
         for (let statement of block.statements) {
             returnValue = this.visitStatement(statement, scope);
         }
@@ -304,20 +310,104 @@ export class Visitor {
         if (ts.isBlock(statement)) return this.visitBlock(statement, scope);
         if (ts.isReturnStatement(statement)) return this.visitReturnStatement(statement, scope);
         if (ts.isImportDeclaration(statement)) this.visitImportDeclaration(statement, scope);
+        if (ts.isInterfaceDeclaration(statement)) this.visitInterfaceDeclaration(statement, scope);
+        if (ts.isExportDeclaration(statement)) this.visitExportDeclaration(statement, scope);
+        if (ts.isWhileStatement(statement)) this.visitWhileStatement(statement, scope);
+        if (ts.isForInStatement(statement)) this.visitForInStatement(statement, scope);
+        if (ts.isForOfStatement(statement)) this.visitForOfStatement(statement, scope);
+        if (ts.isDoStatement(statement)) this.visitDoStatement(statement, scope);
+        if (ts.isContinueStatement(statement)) return this.visitContinueStatement(statement, scope);
+        if (ts.isBreakStatement(statement)) return this.visitBreakStatement(statement, scope);
+    }
+
+    public visitInterfaceDeclaration(interfaceDeclaration: ts.InterfaceDeclaration, scope: Scope) {
+        const structName = interfaceDeclaration.name.text;
+        let structType = this.builder.buildStructType(structName);
+
+        let elementTypes: Type[] = [];
+        let elementNames: string[] = [];
+        for (let member of interfaceDeclaration.members) {
+            if (ts.isMethodSignature(member)) {
+                if (member.type === undefined) throw new SyntaxNotSupportedError();
+
+                let propertyName = this.visitPropertyName(member.name);
+                let returnType = this.visitTypeNode(member.type);
+                let parameterTypes: Type[] = [];
+                let parameterNames: string[] = [];
+                for (let parameter of member.parameters) {
+                    if (parameter.type === undefined) throw new SyntaxNotSupportedError();
+                    let parameterName = this.visitBindingName(parameter.name, scope);
+                    let parameterType = this.visitTypeNode(parameter.type);
+                    parameterNames.push(parameterName);
+                    parameterTypes.push(parameterType);
+                }
+
+                let ptrType = this.builder.buildVirtualFunctionPtr(returnType, parameterTypes);
+                elementNames.push(propertyName);
+                elementTypes.push(ptrType);
+            }
+
+            if (ts.isPropertySignature(member)) {
+                if (member.type === undefined) throw new SyntaxNotSupportedError();
+                let propertyName = this.visitPropertyName(member.name);
+                let propertyType = this.visitTypeNode(member.type);
+                elementTypes.push(propertyType);
+                elementNames.push(propertyName);
+            }
+        }
+
+        structType.setBody(elementTypes);
+    }
+
+
+    public visitExportDeclaration(exportDeclaration: ts.ExportDeclaration, scope: Scope) {
+        let exportClause = exportDeclaration.exportClause;
+        if (exportClause === undefined) return;
+        if (ts.isNamedExports(exportClause)) {
+            for (let element of exportClause.elements) {
+                if (element.propertyName !== undefined) {
+                    // scope.storeExportedIdentifier(element.name.text, element.propertyName.text);
+                } else {
+                    // scope.storeExportedIdentifier(element.name.text, element.name.text);
+                }
+            }
+        }
     }
 
     public visitImportDeclaration(importDeclaration: ts.ImportDeclaration, scope: Scope) {
-        let importClause = importDeclaration.importClause;
-        
-        // TODO: Construct a list of mappings between importName and moduleName
+        // moduleSpecifier should be a string; otherwise it is a grammatical error.
         let moduleSpecifier = importDeclaration.moduleSpecifier;
         if (!isString(moduleSpecifier)) throw new SyntaxNotSupportedError();
+        
+        let importClause = importDeclaration.importClause;
+        // Simply return since only side effects will occur without importing anything.
+        if (importClause === undefined) return;
 
+        let name = importClause.name;
+        if (name !== undefined) {
+            // scope.storeImportedNamespace(moduleSpecifier, name.text);
+        }
 
+        let namedBindings = importClause.namedBindings;
+        if (namedBindings !== undefined) {
+            if (ts.isNamedImports(namedBindings)) {
+                for (let element of namedBindings.elements) {
+                    // scope.storeImportedIdentifier(moduleSpecifier, element.name.text);
+                }
+            }
+
+            if (ts.isNamespaceImport(namedBindings)) {
+                // scope.storeImportedNamespace(moduleSpecifier, namedBindings.name.text);
+            }
+        }
     }
 
-    public visitImportClause(importClause: ts.ImportClause, scope: Scope) {
+    public visitBreakStatement(breakOrContinueStatement: ts.BreakOrContinueStatement, scope: Scope) {
+        return new Break();
+    }
 
+    public visitContinueStatement(breakOrContinueStatement: ts.BreakOrContinueStatement, scope: Scope) {
+        return new Continue();
     }
 
     public visitReturnStatement(returnStatement: ts.ReturnStatement, scope: Scope) {
@@ -334,9 +424,9 @@ export class Visitor {
 
     }
 
-    public visitExpression(expression: ts.Expression, scope: Scope) {
-        // if (ts.isPostfixUnaryExpression(expression)) return this.visitPostfixUnaryExpression(expression, scope);
-        // if (ts.isPrefixUnaryExpression(expression)) return this.visitPrefixUnaryExpression(expression, scope);
+    public visitExpression(expression: ts.Expression, scope: Scope): string | Value {
+        if (ts.isPostfixUnaryExpression(expression)) return this.visitPostfixUnaryExpression(expression, scope);
+        if (ts.isPrefixUnaryExpression(expression)) return this.visitPrefixUnaryExpression(expression, scope);
         if (ts.isFunctionExpression(expression)) return this.visitFunctionExpression(expression, scope);
         if (ts.isCallExpression(expression)) return this.visitCallExpression(expression, scope);
         if (ts.isIdentifier(expression)) return this.visitIdentifier(expression, scope);
@@ -348,7 +438,12 @@ export class Visitor {
         // if (ts.isElementAccessExpression(expression)) return this.visitElementAccessExpression(expression, scope);
         if (ts.isNewExpression(expression)) return this.visitNewExpression(expression, scope);
         if (ts.isArrayLiteralExpression(expression)) return this.visitArrayLiteralExpression(expression, scope);
+        if (ts.isParenthesizedExpression(expression)) return this.visitParenthesizedExpression(expression, scope);
         throw new SyntaxNotSupportedError();
+    }
+
+    public visitParenthesizedExpression(parenthesizedExpression: ts.ParenthesizedExpression, scope: Scope) {
+        return this.visitExpression(parenthesizedExpression.expression, scope);
     }
 
     public visitArrayLiteralExpression(arrayLiteralExpression: ts.ArrayLiteralExpression, scope: Scope) {
@@ -410,14 +505,14 @@ export class Visitor {
 
     public visitObjectLiteralExpression(objectLiteralExpression: ts.ObjectLiteralExpression, scope: Scope) {
 
-        // Collect pairs of key and value from an object
+        // Collect key-value pairs from an object
         let keyArray: string[] = [];
         let valueArray: Value[] = [];
         for (let property of objectLiteralExpression.properties) {
             if (ts.isPropertyAssignment(property)) {
                 // If a property does not have a name or initializer, then it is grammatically wrong.
                 if (property.name === undefined || property.initializer === undefined) throw new SyntaxNotSupportedError();
-                let key = this.visitPropertyName(property.name, scope);
+                let key = this.visitPropertyName(property.name);
                 let visited = this.visitExpression(property.initializer, scope)
                 let value = this.resolveNameDefinition(visited, scope);
                 keyArray.push(key);
@@ -462,11 +557,63 @@ export class Visitor {
     }
 
     public visitPostfixUnaryExpression(postfixUnaryExpression: ts.PostfixUnaryExpression, scope: Scope) {
-        throw new SyntaxNotSupportedError();
+        let visited = this.visitExpression(postfixUnaryExpression.operand, scope);
+        // Only variables are allowed in this expression.
+        if (!isString(visited)) throw new SyntaxNotSupportedError();
+        let value = this.resolveVariableDefinition(visited, scope);
+        let operator = postfixUnaryExpression.operator;
+        let constant = this.builder.buildNumber(1);
+
+        switch (operator) {
+            case ts.SyntaxKind.PlusPlusToken:
+                let plusValue = this.builder.buildAdd(value, constant);
+                let plusAlloca = scope.get(visited);
+                this.builder.buildStore(plusValue, plusAlloca);
+                break;
+            case ts.SyntaxKind.MinusMinusToken:
+                let subValue = this.builder.buildSub(value, constant);
+                let subAlloca = scope.get(visited);
+                this.builder.buildStore(subValue, subAlloca);
+                break;
+            default:
+                throw new SyntaxNotSupportedError();
+        }
+
+        return value;
     }
 
     public visitPrefixUnaryExpression(prefixUnaryExpression: ts.PrefixUnaryExpression, scope: Scope) {
-        throw new SyntaxNotSupportedError();
+        let visited = this.visitExpression(prefixUnaryExpression.operand, scope);
+        // Only variables are allowed in this expression.
+        if (!isString(visited)) throw new SyntaxNotSupportedError();
+        let value = this.resolveVariableDefinition(visited, scope);
+        let operator = prefixUnaryExpression.operator;
+        let constant = this.builder.buildNumber(1);
+
+        switch (operator) {
+            case ts.SyntaxKind.PlusPlusToken:
+                value = this.builder.buildAdd(value, constant);
+                let plusAlloca = scope.get(visited);
+                this.builder.buildStore(value, plusAlloca);
+                break;
+            case ts.SyntaxKind.MinusMinusToken:
+                value = this.builder.buildSub(value, constant);
+                let subAlloca = scope.get(visited);
+                this.builder.buildStore(value, subAlloca);
+                break;
+            case ts.SyntaxKind.ExclamationToken:
+                value = this.builder.buildNot(value);
+                let notAlloca = scope.get(visited);
+                this.builder.buildStore(value, notAlloca);
+                break;
+            case ts.SyntaxKind.PlusToken:
+            case ts.SyntaxKind.MinusToken:
+            case ts.SyntaxKind.TildeToken:
+            default:
+                throw new SyntaxNotSupportedError();
+        }
+
+        return value;
     }
 
     public visitBinaryExpression(binaryExpression: ts.BinaryExpression, scope: Scope) {
@@ -620,7 +767,7 @@ export class Visitor {
     public visitPropertyDeclaration(propertyDeclaration: ts.PropertyDeclaration, scope: Scope) {
 
         if (propertyDeclaration.type === undefined) throw new SyntaxNotSupportedError();
-        let propertyName = this.visitPropertyName(propertyDeclaration.name, scope);
+        let propertyName = this.visitPropertyName(propertyDeclaration.name);
         let propertyType = this.visitTypeNode(propertyDeclaration.type);
 
         let property: Property = {
@@ -637,7 +784,7 @@ export class Visitor {
         return property;
     }
 
-    public visitPropertyName(propertyName: ts.PropertyName, scope: Scope) {
+    public visitPropertyName(propertyName: ts.PropertyName) {
         if (ts.isIdentifier(propertyName)) return propertyName.text;
         if (ts.isStringLiteral(propertyName)) return propertyName.text;
         if (ts.isNumericLiteral(propertyName)) return propertyName.text;
@@ -647,7 +794,7 @@ export class Visitor {
     public visitMethodDeclaration(methodDeclaration: ts.MethodDeclaration, scope: Scope) {
 
         if (methodDeclaration.type === undefined) throw new SyntaxNotSupportedError();
-        let methodName = this.visitPropertyName(methodDeclaration.name, scope);
+        let methodName = this.visitPropertyName(methodDeclaration.name);
         let returnType = this.visitTypeNode(methodDeclaration.type);
         let currentScopeName = scope.getCurrentScopeName();
         let parameterTypes: Type[] = [];
@@ -676,9 +823,11 @@ export class Visitor {
         // Change to a new scope
         scope.enter(methodName, fn);
 
-        let returnValue: Value | undefined;
+        let returnValue: Value | Break | Continue | undefined;
         if (methodDeclaration.body !== undefined) returnValue = this.visitBlock(methodDeclaration.body, scope);
-        this.builder.buildReturn(returnValue);
+        if (returnValue === undefined || isValue(returnValue)) {
+            this.builder.buildReturn(returnValue);
+        }
         this.builder.verifyFunction(fn);
 
         // Return to the last scope
@@ -733,74 +882,264 @@ export class Visitor {
 
     public visitForStatement(forStatement: ts.ForStatement, scope: Scope) {
         scope.enter('For');
-
-        let values: Value[] = [];
-        if (forStatement.initializer !== undefined) {
-            if (ts.isVariableDeclarationList(forStatement.initializer)) {
-                values = this.visitVariableDeclarationList(forStatement.initializer, scope);
-            } else {
-                // TODO: Give justification why it is Value
-                let val = this.visitExpression(forStatement.initializer, scope) as Value;
-                values = [val];
-            }
-        }
-
         let currentFunction = scope.getCurrentFunction();
-
         let entryBlock = currentFunction.getEntryBlock();
         if (!isBasicBlock(entryBlock)) throw new SyntaxNotSupportedError();
+
+        if (forStatement.initializer !== undefined) {
+            if (ts.isVariableDeclarationList(forStatement.initializer)) {
+                this.visitVariableDeclarationList(forStatement.initializer, scope);
+            } else {
+                this.visitExpression(forStatement.initializer, scope);
+            }
+        }
         
-        let loopBlock = this.builder.buildBasicBlock(currentFunction, 'loop');
+        let condBlock = this.builder.buildBasicBlock(currentFunction, 'for.cond');
+        let bodyBlock = this.builder.buildBasicBlock(currentFunction, 'for.body');
+        let incBlock = this.builder.buildBasicBlock(currentFunction, 'for.inc');
+        let endBlock = this.builder.buildBasicBlock(currentFunction, 'for.end');
 
-        this.builder.buildBranch(loopBlock);
-        this.builder.setCurrentBlock(loopBlock);
+        this.builder.setLoopNextBlock(incBlock);
+        this.builder.setLoopEndBlock(endBlock);
 
-        let phi = this.builder.buildPHINode(values, [entryBlock]);
-        let returnValue = this.visitStatement(forStatement.statement, scope);
+        this.builder.setCurrentBlock(entryBlock);
+        this.builder.buildBranch(condBlock);
 
-        let endBlock: BasicBlock | undefined;
-        if (returnValue !== undefined) {
-            endBlock = this.builder.buildBasicBlock(currentFunction, 'end');
-        }
 
-        if (forStatement.incrementor !== undefined) {
-            // TODO: Give justification why it is Value
-            let increment = this.visitExpression(forStatement.incrementor, scope) as Value;
-            phi.addIncoming(increment, loopBlock);
-        }
-
-        // The following handles infinite loops if the condition is not provided
+        // ============= condition basic block =============
+        this.builder.setCurrentBlock(condBlock);
         let condition: Value | undefined;
         if (forStatement.condition !== undefined) {
-            condition = this.visitExpression(forStatement.condition, scope) as Value | undefined;
+            let visited = this.visitExpression(forStatement.condition, scope);
+            condition = this.resolveNameDefinition(visited, scope);
         }
-
-        if (condition !== undefined && endBlock !== undefined) {
-            this.builder.buildConditionBranch(condition, loopBlock, endBlock);
+        // The following snippet handles infinite loops if a condition is not provided.
+        if (condition !== undefined) {
+            this.builder.buildConditionBranch(condition, bodyBlock, endBlock);
         } else {
-            this.builder.buildBranch(loopBlock);
+            this.builder.buildBranch(bodyBlock);
         }
-
-        if (returnValue !== undefined && endBlock !== undefined) {
-            this.builder.setCurrentBlock(endBlock);
+        // ============= Body Basic Block =============
+        this.builder.setCurrentBlock(bodyBlock);
+        let returnValue = this.visitStatement(forStatement.statement, scope);
+        if (returnValue !== undefined && isValue(returnValue)) {
             this.builder.buildReturn(returnValue);
+        } else if (returnValue === undefined || isContinue(returnValue)) {
+            this.builder.buildBranch(incBlock);
+        } else {
+            this.builder.buildBranch(endBlock);
         }
+        // ============= Increment Basic Block =============
+        this.builder.setCurrentBlock(incBlock);
+        if (forStatement.incrementor !== undefined) {
+            this.visitExpression(forStatement.incrementor, scope);
+        }
+        this.builder.buildBranch(bodyBlock);
+        // ============= End Basic Block =============
+        this.builder.setCurrentBlock(endBlock);
 
         scope.leave();
-        // Return back to the previous insertion block before the loop
-        this.builder.setCurrentBlock(entryBlock);
     }
 
     public visitForOfStatement(forOfStatement: ts.ForOfStatement, scope: Scope) {
-        throw new SyntaxNotSupportedError();
+        scope.enter('for-of');
+        let currentFunction = scope.getCurrentFunction();
+        let entryBlock = currentFunction.getEntryBlock();
+        if (!isBasicBlock(entryBlock)) throw new SyntaxNotSupportedError();
+        
+        let visited = this.visitExpression(forOfStatement.expression, scope);
+        let arrayAlloca = this.resolveNameDefinition(visited, scope);
+        let arrayValue = this.builder.buildLoad(arrayAlloca);
+        if (!arrayValue.type.isArrayTy) throw new SyntaxNotSupportedError();
+        let numOfElements = (arrayValue.type as ArrayType).numElements;
+        if (!ts.isVariableDeclarationList(forOfStatement.initializer)) throw new SyntaxNotSupportedError();
+        let variableList = this.visitVariableDeclarationList(forOfStatement.initializer, scope);
+        if (!isStringArray(variableList)) throw new SyntaxNotSupportedError(); 
+
+        let condBlock = this.builder.buildBasicBlock(currentFunction, 'forof.cond');
+        let bodyBlock = this.builder.buildBasicBlock(currentFunction, 'forof.body');
+        let incBlock = this.builder.buildBasicBlock(currentFunction, 'forof.inc');
+        let endBlock = this.builder.buildBasicBlock(currentFunction, 'forof.end');
+
+        this.builder.setLoopNextBlock(incBlock);
+        this.builder.setLoopEndBlock(endBlock);
+        
+        this.builder.setCurrentBlock(entryBlock);
+        let idxValue = this.builder.buildInteger(0, 32);
+        let idxAlloca = this.builder.buildAlloca(idxValue.type);
+        this.builder.buildStore(idxValue, idxAlloca);
+        this.builder.buildBranch(condBlock);
+
+        // ============ Condition Basic Block ===========
+        this.builder.setCurrentBlock(condBlock);
+        let lhs = this.builder.convertIntegerToNumber(this.builder.buildLoad(idxAlloca));
+        let rhs = this.builder.buildNumber(numOfElements);
+        let condition = this.builder.buildLessThan(lhs, rhs);
+        this.builder.buildConditionBranch(condition, bodyBlock, endBlock);
+        // ============ Body Basic Block ===========
+        this.builder.setCurrentBlock(bodyBlock);
+        const offset = this.builder.buildLoad(idxAlloca);
+        const ptr = this.builder.buildAccessPtr(arrayAlloca, offset);
+        scope.set(variableList[0], ptr);
+
+        const returnValue = this.visitStatement(forOfStatement.statement, scope);
+        if (returnValue !== undefined && isValue(returnValue)) {
+            this.builder.buildReturn(returnValue);
+        } else if (returnValue === undefined || isContinue(returnValue)) {
+            this.builder.buildBranch(incBlock);
+        } else {
+            this.builder.buildBranch(endBlock);
+        }
+        // ============ Increment Basic Block ===========
+        this.builder.setCurrentBlock(incBlock);
+        let newLhs = this.builder.buildLoad(idxAlloca);
+        let newRhs = this.builder.buildInteger(1, 32);
+        let newIdxValue = this.builder.buildIntAdd(newLhs, newRhs);
+        this.builder.buildStore(newIdxValue, idxAlloca);
+        this.builder.buildBranch(condBlock);
+        // ============ End Basic Block ============
+        this.builder.setCurrentBlock(endBlock);
+
+        scope.leave();
     }
 
     public visitForInStatement(forInStatement: ts.ForInStatement, scope: Scope) {
-        throw new SyntaxNotSupportedError();
+        scope.enter('for-In');
+        let currentFunction = scope.getCurrentFunction();
+        let entryBlock = currentFunction.getEntryBlock();
+        if (!isBasicBlock(entryBlock)) throw new SyntaxNotSupportedError();
+
+        let visited = this.visitExpression(forInStatement.expression, scope);
+        let structAlloca = this.resolveNameDefinition(visited, scope);
+        let structValue = this.builder.buildLoad(structAlloca);
+        let structType = structValue.type;
+        if (!structType.isStructTy()) throw new SyntaxNotSupportedError();
+        let numOfElements = structType.numElements;
+        if (!ts.isVariableDeclarationList(forInStatement.initializer)) throw new SyntaxNotSupportedError();
+        let variableList = this.visitVariableDeclarationList(forInStatement.initializer, scope);
+        if (!isString(variableList[0])) throw new SyntaxNotSupportedError(); 
+        let variableName = variableList[0];
+
+        let condBlock = this.builder.buildBasicBlock(currentFunction, 'forin.cond');
+        let bodyBlock = this.builder.buildBasicBlock(currentFunction, 'forin.body');
+        let incBlock = this.builder.buildBasicBlock(currentFunction, 'forin.inc');
+        let endBlock = this.builder.buildBasicBlock(currentFunction, 'forin.end');
+        
+        this.builder.setLoopNextBlock(incBlock);
+        this.builder.setLoopEndBlock(endBlock);
+
+        this.builder.setCurrentBlock(entryBlock);
+        let idxValue = this.builder.buildInteger(0, 32);
+        let idxAlloca = this.builder.buildAlloca(idxValue.type);
+        this.builder.buildStore(idxValue, idxAlloca);
+        this.builder.buildBranch(condBlock);
+
+        // ============ Condition Basic Block ===========
+        this.builder.setCurrentBlock(condBlock);
+        let lhs = this.builder.convertIntegerToNumber(this.builder.buildLoad(idxAlloca));
+        let rhs = this.builder.buildNumber(numOfElements);
+        let condition = this.builder.buildLessThan(lhs, rhs);
+        this.builder.buildConditionBranch(condition, bodyBlock, endBlock);
+        // ============ Body Basic Block ===========
+        this.builder.setCurrentBlock(bodyBlock);
+        const first = this.builder.buildLoad(idxAlloca);
+        const second = this.builder.buildInteger(0, 32);
+        const keyPtr = this.builder.buildAccessPtr(structAlloca, first, second);
+        scope.set(variableName, keyPtr);
+        const returnValue = this.visitStatement(forInStatement.statement, scope);
+        if (returnValue !== undefined && isValue(returnValue)) {
+            this.builder.buildReturn(returnValue);
+        } else if (returnValue === undefined || isContinue(returnValue)) {
+            this.builder.buildBranch(incBlock);
+        } else {
+            this.builder.buildBranch(endBlock);
+        }
+        // ============ Increment Basic Block ===========
+        this.builder.setCurrentBlock(incBlock);
+        let newLhs = this.builder.buildLoad(idxAlloca);
+        let newRhs = this.builder.buildInteger(1, 32);
+        let newIdxValue = this.builder.buildIntAdd(newLhs, newRhs);
+        this.builder.buildStore(newIdxValue, idxAlloca);
+        this.builder.buildBranch(condBlock);
+        // ============ End Basic Block ============
+        this.builder.setCurrentBlock(endBlock);
+
+        scope.leave();
     }
 
     public visitWhileStatement(whileStatement: ts.WhileStatement, scope: Scope) {
-        throw new SyntaxNotSupportedError();
+        scope.enter('While');
+        let currentFunction = scope.getCurrentFunction();
+        let entryBlock = currentFunction.getEntryBlock();
+        if (!isBasicBlock(entryBlock)) throw new SyntaxNotSupportedError();
+
+        let condBlock = this.builder.buildBasicBlock(currentFunction, 'while.cond');
+        let bodyBlock = this.builder.buildBasicBlock(currentFunction, 'while.body');
+        let endBlock = this.builder.buildBasicBlock(currentFunction, 'while.end');
+        
+        this.builder.setLoopNextBlock(condBlock);
+        this.builder.setLoopEndBlock(endBlock);
+
+        this.builder.setCurrentBlock(entryBlock);
+        this.builder.buildBranch(condBlock);
+
+        // ============ Condition Basic Block ===========
+        this.builder.setCurrentBlock(condBlock);
+        let visited = this.visitExpression(whileStatement.expression, scope);
+        let condition = this.resolveNameDefinition(visited, scope);
+        this.builder.buildConditionBranch(condition, bodyBlock, endBlock);
+        // ============= Body Basic Block ===============
+        this.builder.setCurrentBlock(bodyBlock);
+        let returnValue = this.visitStatement(whileStatement.statement, scope);
+        if (returnValue !== undefined && isValue(returnValue)) {
+            this.builder.buildReturn(returnValue);
+        } else if (returnValue === undefined || isContinue(returnValue)) {
+            this.builder.buildBranch(condBlock);
+        } else {
+            this.builder.buildBranch(endBlock);
+        }
+        // ============== End basic Block ===============
+        this.builder.setCurrentBlock(endBlock);
+
+        scope.leave();
+    }
+
+    public visitDoStatement(doStatement: ts.DoStatement, scope: Scope) {
+        scope.enter('Do');
+        
+        let currentFunction = scope.getCurrentFunction();
+        let entryBlock = currentFunction.getEntryBlock();
+        if (!isBasicBlock(entryBlock)) throw new SyntaxNotSupportedError();
+
+        let condBlock = this.builder.buildBasicBlock(currentFunction, 'do.cond');
+        let bodyBlock = this.builder.buildBasicBlock(currentFunction, 'do.body');
+        let endBlock = this.builder.buildBasicBlock(currentFunction, 'do.end');
+
+        this.builder.setLoopNextBlock(condBlock);
+        this.builder.setLoopEndBlock(endBlock);
+
+        this.builder.setCurrentBlock(entryBlock);
+        this.builder.buildBranch(bodyBlock);
+
+        // ============ Condition Basic Block ===========
+        this.builder.setCurrentBlock(condBlock);
+        let visited = this.visitExpression(doStatement.expression, scope);
+        let condition = this.resolveNameDefinition(visited, scope);
+        this.builder.buildConditionBranch(condition, bodyBlock, endBlock);
+        // ============= Body Basic Block ===============
+        this.builder.setCurrentBlock(bodyBlock);
+        let returnValue = this.visitStatement(doStatement.statement, scope);
+        if (returnValue !== undefined && isValue(returnValue)) {
+            this.builder.buildReturn(returnValue);
+        } else if (returnValue === undefined || isContinue(returnValue)) {
+            this.builder.buildBranch(condBlock);
+        } else {
+            this.builder.buildBranch(endBlock);
+        }
+        // ============== End basic Block ===============
+        this.builder.setCurrentBlock(endBlock);
+
+        scope.leave();
     }
 
     private resolveNameDefinition(visited: Value | string, scope: Scope) {

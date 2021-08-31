@@ -129,7 +129,6 @@ describe('Builder ', () => {
     });
 
     it('gets the current block', () => {
-        expect(builder.getCurrentBlock()).toBeUndefined();
         let fnType = builder.buildNumberType();
         let fn = builder.buildFunction('newFun', fnType, [], []);
         builder.buildBasicBlock(fn);

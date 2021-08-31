@@ -7,6 +7,8 @@ export class Builder {
     private llvmContext: llvm.LLVMContext;
     private llvmModule: llvm.Module;
     private llvmBuilder: llvm.IRBuilder;
+    private loopEndBlock: llvm.BasicBlock | undefined;
+    private loopNextBlock: llvm.BasicBlock | undefined;
 
     constructor(moduleId: string) {
         this.llvmContext = new llvm.LLVMContext();
@@ -123,12 +125,21 @@ export class Builder {
         return fn;
     }
 
+    public buildVirtualFunctionPtr(returnType: Type, argTypes: Type[]) {
+        let fnType = llvm.FunctionType.get(returnType, argTypes, true);
+        return llvm.PointerType.get(fnType, 0);
+    }
+
     public verifyFunction(fn: llvm.Function) {
         llvm.verifyFunction(fn);
     }
 
     public verifyModule() {
         llvm.verifyModule(this.llvmModule);
+    }
+
+    public buildIntAdd(lhs: Value, rhs: Value, name?: string) {
+        return this.llvmBuilder.createAdd(lhs, rhs, name);
     }
 
     public buildAdd(lhs: Value, rhs: Value, name?: string) {
@@ -184,7 +195,27 @@ export class Builder {
     }
 
     public getCurrentBlock() {
-        return this.llvmBuilder.getInsertBlock();
+        let block = this.llvmBuilder.getInsertBlock();
+        if (block === undefined) throw new SyntaxNotSupportedError();
+        return block;
+    }
+
+    public setLoopEndBlock(block: BasicBlock) {
+        this.loopEndBlock = block;
+    }
+
+    public setLoopNextBlock(block: BasicBlock) {
+        this.loopNextBlock = block;
+    }
+
+    public getLoopEndBlock() {
+        if (this.loopEndBlock === undefined) throw new SyntaxNotSupportedError();
+        return this.loopEndBlock;
+    }
+
+    public getLoopNextBlock() {
+        if (this.loopNextBlock === undefined) throw new SyntaxNotSupportedError();
+        return this.loopNextBlock;
     }
 
     public buildConditionBranch(ifCondition: Value, thenBasicBlock: BasicBlock, elseBasicBlock: BasicBlock) {
@@ -258,6 +289,14 @@ export class Builder {
         return this.llvmBuilder.createInBoundsGEP(ptr, values);
     }
 
+    public buildInsertValue(ptr: Value, value: Value, ...indices: number[]) {
+        return this.llvmBuilder.createInsertValue(ptr, value, indices);
+    }
+
+    public buildIntCast(value: Value, numBits: number) {
+        return this.llvmBuilder.createIntCast(value, llvm.Type.getIntNTy(this.llvmContext, numBits), true);
+    }
+
     public buildInteger(num: number, numBits: number) {
         return llvm.ConstantInt.get(this.llvmContext, num, numBits);
     }
@@ -281,6 +320,10 @@ export class Builder {
 
     public buildAny() {
         return llvm.ConstantStruct.get(llvm.StructType.create(this.llvmContext), []);
+    }
+
+    public convertIntegerToNumber(value: Value) {
+        return this.llvmBuilder.createSIToFP(value, llvm.Type.getDoubleTy(this.llvmContext));
     }
 
     public printIR() {
