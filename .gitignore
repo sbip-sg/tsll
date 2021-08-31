@@ -105,3 +105,7 @@ dist
 
 # Typescript build output
 lib
+
+# LLVM output
+.ll
+.bc
