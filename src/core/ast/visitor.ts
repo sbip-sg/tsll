@@ -1,10 +1,10 @@
-import ts, { isBreakOrContinueStatement, isContinueStatement } from 'typescript';
+import ts from 'typescript';
 import { SyntaxNotSupportedError, InstantiateError, VariableUndefinedError } from '../../common/error';
 import { Builder } from '../ir/builder';
-import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst } from '../ir/types';
+import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst, isFunction } from '../ir/types';
 import { Scope } from '../../common/scope';
 import { isString, FunctionLikeDeclaration, Property, isStringArray, isBreak, isContinue, Break, Continue } from '../../common/types';
-import llvm, { ArrayType, ConstantInt } from 'llvm-node';
+import { ArrayType } from 'llvm-node';
 
 export class Visitor {
 
@@ -63,15 +63,6 @@ export class Visitor {
         let name = this.visitBindingName(variableDeclaration.name, scope);
         
         if (variableDeclaration.initializer === undefined) return name;
-        if (variableDeclaration.type !== undefined) {
-            if (ts.isArrayTypeNode(variableDeclaration.type)) {
-                let type = this.visitArrayTypeNode(variableDeclaration.type);
-                scope.setNextType(type);
-            } else {
-                let type = this.visitTypeNode(variableDeclaration.type)
-                scope.setNextType(type);
-            }
-        }
 
         let visited = this.visitExpression(variableDeclaration.initializer, scope);
 
@@ -82,6 +73,12 @@ export class Visitor {
             this.builder.buildStore(visitedValue, newAlloca);
             scope.set(name, newAlloca);
             return newAlloca;
+        }
+
+        if (isFunction(visited)) {
+            visited.name = name;
+            scope.set(name, visited);
+            return visited;
         }
 
         if (isAllocaInst(visited)) {
@@ -204,16 +201,17 @@ export class Visitor {
     }
 
     public visitFunctionDeclaration(functionDeclaration: ts.FunctionDeclaration, scope: Scope) {
-        this.visitFunctionLikeDeclaration(functionDeclaration, scope);
+        const fn = this.visitFunctionLikeDeclaration(functionDeclaration, scope);
+        scope.set(fn.name, fn);
     }
 
     public visitFunctionLikeDeclaration(functionLikeDeclaration: FunctionLikeDeclaration, scope: Scope) {
 
-        if (functionLikeDeclaration.name === undefined || !ts.isIdentifier(functionLikeDeclaration.name)) throw new SyntaxNotSupportedError();
+        if (functionLikeDeclaration.name !== undefined && !ts.isIdentifier(functionLikeDeclaration.name)) throw new SyntaxNotSupportedError();
         if (functionLikeDeclaration.type === undefined) throw new SyntaxNotSupportedError();
         
         let returnType = this.visitTypeNode(functionLikeDeclaration.type);
-        let functionName = functionLikeDeclaration.name.text;
+        let functionName = functionLikeDeclaration.name?.text || 'noname';
         let parameterTypes: Type[] = [];
         let parameterNames: string[] = [];
         let defaultValues = new Map<string, Value>();
@@ -272,15 +270,15 @@ export class Visitor {
 
     public visitCallExpression(callExpression: ts.CallExpression, scope: Scope) {
 
-        let name = this.visitExpression(callExpression.expression, scope) as string;
+        let name = this.visitExpression(callExpression.expression, scope);
+
+        if (!isString(name)) throw new SyntaxNotSupportedError();
 
         let values: Value[] = [];
 
         for (let argument of callExpression.arguments) {
-            let expressionValue = this.visitExpression(argument, scope);
-
-            let value = this.resolveNameDefinition(expressionValue, scope);
-
+            let visited = this.visitExpression(argument, scope);
+            let value = this.resolveNameDefinition(visited, scope);
             values.push(value);
         }
 
@@ -439,7 +437,19 @@ export class Visitor {
         if (ts.isNewExpression(expression)) return this.visitNewExpression(expression, scope);
         if (ts.isArrayLiteralExpression(expression)) return this.visitArrayLiteralExpression(expression, scope);
         if (ts.isParenthesizedExpression(expression)) return this.visitParenthesizedExpression(expression, scope);
+        if (ts.isToken(expression)) return this.visitToken(expression, scope);
         throw new SyntaxNotSupportedError();
+    }
+
+    public visitToken(token: ts.Expression, scope: Scope) {
+        switch (token.kind) {
+            case ts.SyntaxKind.TrueKeyword:
+                return this.builder.buildBoolean(true);
+            case ts.SyntaxKind.FalseKeyword:
+                return this.builder.buildBoolean(false);
+            default:
+                throw new SyntaxNotSupportedError();
+        }
     }
 
     public visitParenthesizedExpression(parenthesizedExpression: ts.ParenthesizedExpression, scope: Scope) {
@@ -448,24 +458,21 @@ export class Visitor {
 
     public visitArrayLiteralExpression(arrayLiteralExpression: ts.ArrayLiteralExpression, scope: Scope) {
 
-        let elementType = scope.getNextType();
-        let arrayLen = arrayLiteralExpression.elements.length;
-
-        // Allocate memory space of a specific size
-        let arrayType = this.builder.buildArrayType(elementType, arrayLen);
-        let allocaValue = this.builder.buildAlloca(arrayType, 0);
-
-        // Store each value into the allocated array of memory
+        const arrayLen = arrayLiteralExpression.elements.length;
+        let arrayType = this.builder.buildArrayType(this.builder.buildNumberType(), arrayLen);
+        let arrayAlloca = this.builder.buildAlloca(arrayType);
+        // // Create value for each element
         for (let i = 0; i < arrayLen; i++) {
             let visited = this.visitExpression(arrayLiteralExpression.elements[i], scope);
-            let value = this.resolveNameDefinition(visited , scope);
-            let firstValue = this.builder.buildInteger(0, 64);
-            let secondValue =this.builder.buildInteger(i, 64);
-            let ptrValue = this.builder.buildAccessPtr(allocaValue, firstValue, secondValue);
-            this.builder.buildStore(value, ptrValue);
+            const value = this.resolveNameDefinition(visited , scope)
+            const offset1 = this.builder.buildInteger(0, 32);
+            const offset2 = this.builder.buildInteger(i, 64);
+            const ptrType = this.builder.buildPointerType(value.type)
+            const ptr = this.builder.buildBitcast(this.builder.buildAccessPtr(arrayAlloca, offset1, offset2), ptrType);
+            this.builder.buildStore(value, ptr);
         }
 
-        return allocaValue;
+        return arrayAlloca;
     }
 
     public visitFunctionExpression(functionExpression: ts.FunctionExpression, scope: Scope) {
@@ -479,21 +486,17 @@ export class Visitor {
 
         let allocaValue = this.builder.buildAlloca(structType, undefined, structType.name);
 
-        let defaultValues = scope.getDefaultValues(`${structType.name}_Constructor`);
-
-
         // TODO: Match the parameters of a constructor with the arguments given for class instantiation
-        if (newExpression.arguments === undefined) {
-            this.builder.buildFunctionCall(`${structType.name}_Constructor`, [], defaultValues);
-        
+        if (newExpression.arguments === undefined || newExpression.arguments.length === 0) {
+            this.builder.buildFunctionCall(`${structType.name}_DefaultConstructor`, [allocaValue], new Map());
         } else {
-
+            let defaultValues = scope.getDefaultValues(`${structType.name}_Constructor`);
             // First argument of any member function calls is always a pointer to a struct type
             // In this case, we are creating a class instance using the new operator, and calling an appropriate constructor
             let values: Value[] = [allocaValue];
             for (let argument of newExpression.arguments) {
-                let visitedArg = this.visitExpression(argument, scope);
-                let value = this.resolveNameDefinition(visitedArg, scope);
+                let argVisited = this.visitExpression(argument, scope);
+                let value = this.resolveNameDefinition(argVisited, scope);
                 values.push(value);
             }
 
@@ -671,17 +674,24 @@ export class Visitor {
     }
 
     public visitPropertyAccessExpression(propertyAccessExpression: ts.PropertyAccessExpression, scope: Scope) {
-
+        propertyAccessExpression.kind
         let visited = this.visitExpression(propertyAccessExpression.expression, scope);
-        // Find the name and value
-        let allocaValue = this.resolveNameDefinition(visited, scope);
-        if (!allocaValue.type.isStructTy() || !isString(allocaValue.type.name)) throw new SyntaxNotSupportedError();
         
-        // Find the index of a specific name defined in the structure
-        let idx = scope.indexInStruct(allocaValue.type.name, propertyAccessExpression.name.text);
-        let firstValue = this.builder.buildInteger(0, 32);
-        let secondValue = this.builder.buildInteger(idx, 32);
-        return this.builder.buildAccessPtr(allocaValue, firstValue, secondValue);
+        // visited could be either a pointer to a struct or a string identifier
+        // If the identifier is not found in the current scope, it is possible that the identifier is not complete yet.
+        if (isString(visited)) {
+            if (!scope.has(visited)) return `${visited}_${propertyAccessExpression.name.text}`;
+            visited = scope.get(visited);
+        }
+        let structType = visited.type;
+        if (!structType.isStructTy() || structType.name === undefined) throw new SyntaxNotSupportedError();
+    
+        // Find the index of a specific name defined in the struct
+        let idx = scope.indexInStruct(structType.name, propertyAccessExpression.name.text);
+        let offset1 = this.builder.buildInteger(0, 32);
+        let offset2 = this.builder.buildInteger(idx, 32);
+        return this.builder.buildAccessPtr(visited, offset1, offset2);
+
     }
 
     public visitElementAccessExpression(elementAccessExpression: ts.ElementAccessExpression, scope: Scope) {
@@ -702,7 +712,8 @@ export class Visitor {
         return this.builder.buildNumber(num);
     }
 
-    public visitTypeNode(typeNode: ts.TypeNode) {
+    public visitTypeNode(typeNode?: ts.TypeNode) {
+        if (typeNode === undefined) return this.builder.buildAnyType();
         switch (typeNode.kind) {
             case ts.SyntaxKind.NumberKeyword:
                 return this.builder.buildNumberType();
@@ -715,6 +726,7 @@ export class Visitor {
             case ts.SyntaxKind.ObjectKeyword:
                 return this.builder.buildStructType('');
             case ts.SyntaxKind.AnyKeyword:
+                return this.builder.buildAnyType();
             default:
                 throw new SyntaxNotSupportedError();
         }
@@ -723,9 +735,10 @@ export class Visitor {
     public visitClassDeclaration(classDeclaration: ts.ClassDeclaration, scope: Scope) {
         if (classDeclaration.name === undefined) throw new SyntaxNotSupportedError();
         let className = classDeclaration.name.text;
-        
+
         scope.enter(className);
 
+        // Dispatch a variety of properties of the class
         let propertyDeclarations: ts.PropertyDeclaration[] = [];
         let methodDeclarations: ts.MethodDeclaration[] = [];
         let constructorDeclarations: ts.ConstructorDeclaration[] = [];
@@ -742,7 +755,7 @@ export class Visitor {
         }
 
         // Build a struct type with the class name
-        this.builder.buildStructType(className);
+        const structType = this.builder.buildStructType(className);
         // Inser property types into the struct type created above 
         this.builder.insertPropertyType(className, ...propertyTypes);
 
@@ -752,7 +765,7 @@ export class Visitor {
 
         // If no construtors are provided, create a default constructor
         if (constructorDeclarations.length === 0) {
-            this.builder.buildConstructor(className, []);
+            this.builder.buildConstructor(structType, `${className}_DefaultConstructor`);
             this.builder.buildReturn();
         }
 
@@ -796,7 +809,7 @@ export class Visitor {
         if (methodDeclaration.type === undefined) throw new SyntaxNotSupportedError();
         let methodName = this.visitPropertyName(methodDeclaration.name);
         let returnType = this.visitTypeNode(methodDeclaration.type);
-        let currentScopeName = scope.getCurrentScopeName();
+        let className = scope.getCurrentScopeName();
         let parameterTypes: Type[] = [];
         let parameterNames: string[] = [];
         let defaultValues = new Map<string, Value>();
@@ -816,8 +829,8 @@ export class Visitor {
             let parameterType = this.visitTypeNode(parameter.type);
             parameterTypes.push(parameterType);
         }
-
-        let fn = this.builder.buildClassMethod(`${currentScopeName}_${methodName}`, returnType, parameterTypes);
+        const structType = this.builder.getStructType(className);
+        let fn = this.builder.buildClassMethod(structType, `${className}_${methodName}`, returnType, parameterTypes);
         // Use the function name appropriately modified by LLVM
         scope.setDefaultValues(fn.name, defaultValues);
         // Change to a new scope
@@ -840,7 +853,7 @@ export class Visitor {
 
     public visitConstructorDeclaration(constructorDeclaration: ts.ConstructorDeclaration, scope: Scope) {
         
-        let currentScopeName = scope.getCurrentScopeName();
+        let className = scope.getCurrentScopeName();
         let parameterTypes: Type[] = [];
         let parameterNames: string[] = [];
         let defaultValues = new Map<string, Value>();
@@ -856,14 +869,13 @@ export class Visitor {
                 defaultValues.set(parameterName, value);
             }
 
-            if (parameter.type === undefined) throw new SyntaxNotSupportedError();
             let parameterType = this.visitTypeNode(parameter.type);
             parameterTypes.push(parameterType);
         }
-
-        let fn = this.builder.buildConstructor(`${currentScopeName}_Constructor`, parameterTypes);
+        let structType = this.builder.getStructType(className);
+        let fn = this.builder.buildConstructor(structType, `${className}_Constructor`, ...parameterTypes);
         // Use the function name appropriately modified by LLVM
-        scope.setDefaultValues(fn.name, defaultValues);
+        scope.setDefaultValues(`${className}_Constructor`, defaultValues);
         // Change to a new scope
         scope.enter('Constructor', fn);
 

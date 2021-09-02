@@ -14,6 +14,7 @@ export class Builder {
         this.llvmContext = new llvm.LLVMContext();
         this.llvmModule = new llvm.Module(moduleId, this.llvmContext);
         this.llvmBuilder = new llvm.IRBuilder(this.llvmContext);
+        // includeBuiltinTypes(this.llvmModule);
     }
 
     public buildGlobalVariable(val: Value, name?: string) {
@@ -80,6 +81,10 @@ export class Builder {
         return llvm.Type.getDoubleTy(this.llvmContext);
     }
 
+    public buildInt32Type(): Type {
+        return llvm.Type.getInt32Ty(this.llvmContext);
+    }
+
     public buildStringType(size: number): Type {
         return llvm.ArrayType.get(llvm.Type.getInt8Ty(this.llvmContext), size);
     }
@@ -92,7 +97,7 @@ export class Builder {
         // The following checks if parameter types match argument types as defined for a function
         let args = fn.getArguments();
         let anyType = this.buildAnyType();
-        for (let i = 0; i < args.length; i++) {
+        for (let i = 1; i < args.length; i++) {
             if (i >= parameters.length) {
                 let defaultValue = defaultValues.get(args[i].name);
                 if (defaultValue === undefined) throw new FunctionUndefinedError();
@@ -241,6 +246,10 @@ export class Builder {
         return llvm.StructType.create(this.llvmContext, name);
     }
 
+    public buildPointerType(type: Type) {
+        return llvm.PointerType.get(type, 0);
+    }
+
     public insertPropertyType(name: string, ...types: Type[]) {
         let structType = this.llvmModule.getTypeByName(name);
         if (structType === null) throw new TypeUndefinedError();
@@ -253,12 +262,10 @@ export class Builder {
         return structType;
     }
 
-    public buildConstructor(name: string, paramTypes: Type[]) {
-        let structType = this.llvmModule.getTypeByName(name);
-        if (structType === null) throw new SyntaxNotSupportedError();
+    public buildConstructor(structType: llvm.StructType, name: string, ...paramTypes: Type[]) {
         let ptrType = llvm.PointerType.get(structType, 0);
         paramTypes.unshift(ptrType);
-        let functionType = llvm.FunctionType.get(structType, paramTypes, true);
+        let functionType = llvm.FunctionType.get(this.buildVoidType(), paramTypes, true);
         let fn = llvm.Function.create(functionType, llvm.LinkageTypes.ExternalLinkage, name, this.llvmModule);
 
         let functionBlock = this.buildBasicBlock(fn);
@@ -269,9 +276,7 @@ export class Builder {
         return fn;
     }
 
-    public buildClassMethod(name: string, returnType: Type, paramTypes: Type[]) {
-        let structType = this.llvmModule.getTypeByName(name);
-        if (structType === null) throw new SyntaxNotSupportedError();
+    public buildClassMethod(structType: llvm.StructType, name: string, returnType: Type, paramTypes: Type[]) {
         let ptrType = llvm.PointerType.get(structType, 0);
         paramTypes.unshift(ptrType);
         let methodType = llvm.FunctionType.get(returnType, paramTypes, true);
@@ -283,6 +288,10 @@ export class Builder {
         method.getArguments()[0].name = 'this';
 
         return method;
+    }
+
+    public buildBitcast(fromValue: Value, toType: Type) {
+        return this.llvmBuilder.createBitCast(fromValue, toType);
     }
 
     public buildAccessPtr(ptr: Value, ...values: Value[]) {
@@ -315,7 +324,8 @@ export class Builder {
     }
 
     public buildAnyType() {
-        return llvm.StructType.create(this.llvmContext);
+        let structType = llvm.StructType.create(this.llvmContext, 'any');
+        return llvm.PointerType.get(structType, 0);
     }
 
     public buildAny() {

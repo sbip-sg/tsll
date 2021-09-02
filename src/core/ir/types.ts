@@ -19,6 +19,10 @@ export function isAllocaInst(val: any): val is AllocaInst {
     return val instanceof AllocaInst;
 }
 
+export function isFunction(val: any): val is Function {
+    return val instanceof Function;
+}
+
 export function isGlobalVariable(val: any): val is GlobalVariable {
     return val instanceof GlobalVariable;
 }
