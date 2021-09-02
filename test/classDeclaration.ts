@@ -1,12 +1,16 @@
 class TestClass {
-    public testPulbicMember: string;
+    private testPulbicMember: string;
     // private testPrivateMember: number;
 
     // public testPulbicMemberFunction() {
     //     return this.testPrivateMember;
     // }
 
-    public testPrivateMemberFunction(a: number) {
+    constructor(intro: string) {
+        // this.testPulbicMember = intro;
+    }
+
+    public testPrivateMemberFunction(a: number): void {
         // this.testPulbicMember;
     }
 
@@ -14,3 +18,6 @@ class TestClass {
     //     return this.testPrivateMemberFunction();
     // }
 }
+
+let a = new TestClass('yo ho there you are');
+// a.testPrivateMemberFunction(30);
