@@ -107,5 +107,5 @@ dist
 lib
 
 # LLVM output
-.ll
-.bc
+*.ll
+*.bc
