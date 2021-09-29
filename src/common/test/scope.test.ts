@@ -1,4 +1,4 @@
-import llvm from 'llvm-node';
+import llvm from '@lungchen/llvm-node';
 import { Scope } from '../scope';
 
 describe('Scope ', () => {

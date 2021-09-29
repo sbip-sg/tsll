@@ -1,5 +1,5 @@
 
-import llvm from 'llvm-node';
+import llvm from '@lungchen/llvm-node';
 import { Builder } from '../builder';
 
 describe('Builder ', () => {

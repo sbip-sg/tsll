@@ -1,4 +1,4 @@
-import llvm from "llvm-node";
+import llvm from "@lungchen/llvm-node";
 import { isAllocaInst, isBasicBlock, isCallInst, isConstant, isConstantFP, isGlobalVariable, isType, isValue } from "../types";
 
 describe('Type assertion', () => {
