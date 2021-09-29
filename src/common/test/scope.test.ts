@@ -70,18 +70,6 @@ describe('Scope ', () => {
         expect(scope.isModuleScope()).toBeTruthy();
     });
 
-    it('should define a struct name with its element names successfully', () => {
-        let spy = jest.spyOn(scope, 'defineStruct');
-        scope.defineStruct('awesomeStruct', 'monitor');
-        expect(spy).toHaveReturned();
-    });
-
-    it('finds the index of an element name in a struct', () => {
-        scope.defineStruct('proudStruct', 'shaker');
-        let shakerIdx = scope.indexInStruct('proudStruct', 'shaker');
-        expect(shakerIdx).toBe(0);
-    });
-
     it('sets default values for a function', () => {
         let spy = jest.spyOn(scope, 'setDefaultValues');
         scope.setDefaultValues('functionName', new Map());
