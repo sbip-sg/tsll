@@ -70,10 +70,10 @@ describe('Builder ', () => {
         expect(gv).toBeInstanceOf(llvm.GlobalVariable);
     });
 
-    it('builds a string', () => {
-        let str = builder.buildString('neverknown');
-        expect(str).toBeInstanceOf(llvm.ConstantDataArray);
-    });
+    // it('builds a string', () => {
+    //     let str = builder.buildString('neverknown');
+    //     expect(str).toBeInstanceOf(llvm.ConstantDataArray);
+    // });
 
     it('builds a boolean', () => {
         let boolean = builder.buildBoolean(false);
@@ -86,13 +86,13 @@ describe('Builder ', () => {
         expect(booleanType.typeID).toBe(boolean.type.typeID);
     });
 
-    it('builds an array type of specific element type', () => {
-        let spy = jest.spyOn(builder, 'buildArrayType');
-        let elementType = builder.buildBooleanType();
-        let arrayType = builder.buildArrayType(elementType, 10);
-        expect(spy).toHaveReturned();
-        expect(arrayType.elementType.typeID).toBe(elementType.typeID);
-    });
+    // it('builds an array type of specific element type', () => {
+    //     let spy = jest.spyOn(builder, 'buildArrayType');
+    //     let elementType = builder.buildBooleanType();
+    //     let arrayType = builder.buildArrayType(elementType, 10);
+    //     expect(spy).toHaveReturned();
+    //     expect(arrayType.elementType.typeID).toBe(elementType.typeID);
+    // });
 
     it('builds a basic block', () => {
         let fn = builder.buildFunction('fnName', builder.buildNumberType(), [], []);
