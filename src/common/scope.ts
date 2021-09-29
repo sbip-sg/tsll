@@ -91,17 +91,6 @@ export class Scope {
         return this.tableArray.length === 1;
     }
 
-    public defineStruct(structName: string, ...elementNames: string[]) {
-        this.structMap.set(structName, elementNames);
-    }
-
-    public indexInStruct(structName: string, elementName: string) {
-        let structMap = this.structMap.get(structName);
-        if (structMap === undefined) throw new TypeUndefinedError()
-        let elementIdx = structMap.indexOf(elementName);
-        if (elementIdx !== -1) return elementIdx;
-        throw new TypeUndefinedError();
-    }
     public getNextType() {
         if (this.nextType === undefined) throw new SyntaxNotSupportedError();
         return this.nextType;

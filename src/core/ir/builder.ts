@@ -1,4 +1,4 @@
-import llvm from 'llvm-node';
+import llvm from '@lungchen/llvm-node';
 import { FunctionUndefinedError, SyntaxNotSupportedError, TypeUndefinedError } from "../../common/error";
 import { Type, Value, BasicBlock, isConstant } from "./types";
 
@@ -9,11 +9,14 @@ export class Builder {
     private llvmBuilder: llvm.IRBuilder;
     private loopEndBlock: llvm.BasicBlock | undefined;
     private loopNextBlock: llvm.BasicBlock | undefined;
+    private lastStructType: llvm.StructType | undefined;
+    private structMap: Map<string, Array<string>>;
 
     constructor(moduleId: string) {
         this.llvmContext = new llvm.LLVMContext();
         this.llvmModule = new llvm.Module(moduleId, this.llvmContext);
         this.llvmBuilder = new llvm.IRBuilder(this.llvmContext);
+        this.structMap = new Map();
         // includeBuiltinTypes(this.llvmModule);
     }
 
@@ -41,7 +44,7 @@ export class Builder {
     }
 
     public buildString(str: string) {
-        return llvm.ConstantDataArray.getString(this.llvmContext, str);
+        return this.llvmBuilder.createGlobalStringPtr(str);
     }
 
     public buildNot(val: Value, name?: string) {
@@ -86,7 +89,7 @@ export class Builder {
     }
 
     public buildStringType(size: number): Type {
-        return llvm.ArrayType.get(llvm.Type.getInt8Ty(this.llvmContext), size);
+        return llvm.Type.getInt8PtrTy(this.llvmContext);
     }
 
     public buildFunctionCall(name: string, parameters: Value[], defaultValues: Map<string, Value>) {
@@ -106,8 +109,6 @@ export class Builder {
             }
             if (!args[i].type.equals(parameters[i].type) && !args[i].type.equals(anyType)) throw new FunctionUndefinedError();
         }
-
-        
 
         return this.llvmBuilder.createCall(fn.type.elementType, fn, parameters);
     }
@@ -187,12 +188,14 @@ export class Builder {
         return this.llvmBuilder.createFCmpOGE(lhs, rhs);
     }
 
-    public buildBasicBlock(parent: llvm.Function, name?: string) {
+    public buildBasicBlock(parent?: llvm.Function, name?: string) {
+        let basicBlock: BasicBlock;
         if (name === undefined) {
-            return llvm.BasicBlock.create(this.llvmContext, '', parent);
+            basicBlock = llvm.BasicBlock.create(this.llvmContext, name, parent);
         } else {
-            return llvm.BasicBlock.create(this.llvmContext, name, parent);
+            basicBlock = llvm.BasicBlock.create(this.llvmContext, name, parent);
         }
+        return basicBlock;
     }
 
     public setCurrentBlock(basicBlock: BasicBlock) {
@@ -242,8 +245,14 @@ export class Builder {
 
     public buildStructType(name: string) {
         let structType = this.llvmModule.getTypeByName(name);
-        if (name !== undefined && structType !== null) return structType;
-        return llvm.StructType.create(this.llvmContext, name);
+        if (structType !== null) {
+            // For future reference
+            this.lastStructType = structType;
+        } else {
+            this.lastStructType = llvm.StructType.create(this.llvmContext, name);
+        }
+
+        return this.lastStructType;
     }
 
     public buildPointerType(type: Type) {
@@ -256,36 +265,60 @@ export class Builder {
         structType.setBody(types);
     }
 
+    public insertProperty(name: string, types: Type[], names: string[]) {
+        let structType = this.llvmModule.getTypeByName(name);
+        if (structType === null) throw new TypeUndefinedError();
+        structType.setBody(types);
+        this.structMap.set(name, names);
+    }
+
     public getStructType(name: string) {
         let structType = this.llvmModule.getTypeByName(name);
         if (structType === null) throw new TypeUndefinedError();
         return structType;
     }
 
-    public buildConstructor(structType: llvm.StructType, name: string, ...paramTypes: Type[]) {
-        let ptrType = llvm.PointerType.get(structType, 0);
-        paramTypes.unshift(ptrType);
+    public getLastStructType() {
+        if (this.lastStructType === undefined) throw new TypeUndefinedError();
+        return this.lastStructType;
+    }
+
+    public findIndexInStruct(structName: string, elementName: string) {
+        const indices = this.structMap.get(structName);
+        if (indices === undefined) throw new TypeUndefinedError();
+        return indices.indexOf(elementName);
+    }
+
+    public buildConstructor(name: string, paramTypes: Type[], paramNames: string[]) {
         let functionType = llvm.FunctionType.get(this.buildVoidType(), paramTypes, true);
         let fn = llvm.Function.create(functionType, llvm.LinkageTypes.ExternalLinkage, name, this.llvmModule);
 
         let functionBlock = this.buildBasicBlock(fn);
         this.setCurrentBlock(functionBlock);
 
-        fn.getArguments()[0].name = 'this';
+        const args = fn.getArguments();
+        let i = 0;
+        do {
+            args[i].name = paramNames[i];
+            ++i;
+        } while (i < paramNames.length);
 
         return fn;
     }
 
-    public buildClassMethod(structType: llvm.StructType, name: string, returnType: Type, paramTypes: Type[]) {
-        let ptrType = llvm.PointerType.get(structType, 0);
-        paramTypes.unshift(ptrType);
+    public buildClassMethod(name: string, returnType: Type, paramTypes: Type[], paramNames: string[]) {
         let methodType = llvm.FunctionType.get(returnType, paramTypes, true);
         let method = llvm.Function.create(methodType, llvm.LinkageTypes.ExternalLinkage, name, this.llvmModule);
 
         let methodBlock = this.buildBasicBlock(method);
         this.setCurrentBlock(methodBlock);
 
-        method.getArguments()[0].name = 'this';
+        const args = method.getArguments();
+        let i = 0;
+        do {
+            args[i].name = paramNames[i];
+            ++i;
+        } while (i < paramNames.length);
 
         return method;
     }
@@ -330,6 +363,31 @@ export class Builder {
 
     public buildAny() {
         return llvm.ConstantStruct.get(llvm.StructType.create(this.llvmContext), []);
+    }
+
+    public buildLandingPad(type: llvm.Type) {
+        const ptrType = this.buildPointerType(type);
+        return this.llvmBuilder.createLandingPad(ptrType, 1);
+    }
+
+    public buildIntType(numBits: number) {
+        return llvm.Type.getIntNTy(this.llvmContext, numBits);
+    }
+
+    public buildInvoke(callee: llvm.Value, args: llvm.Value[], normalDest: llvm.BasicBlock, unwindDest: llvm.BasicBlock) {
+        const calleeType = callee.type;
+        if (!calleeType.isFunctionTy()) throw new SyntaxNotSupportedError();
+        return this.llvmBuilder.createInvoke(calleeType, callee, normalDest, unwindDest, args);
+    }
+
+    public buildResume(value: llvm.Value) {
+        return this.llvmBuilder.createResume(value);
+    }
+
+    public getFunction(name: string) {
+        const fn = this.llvmModule.getFunction(name);
+        if (fn === undefined) throw new FunctionUndefinedError();
+        return fn;
     }
 
     public convertIntegerToNumber(value: Value) {

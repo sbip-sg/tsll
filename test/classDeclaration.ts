@@ -1,23 +1,23 @@
 class TestClass {
     private testPulbicMember: string;
-    // private testPrivateMember: number;
-
-    // public testPulbicMemberFunction() {
-    //     return this.testPrivateMember;
-    // }
+    private testPrivateMember: number;
 
     constructor(intro: string) {
-        // this.testPulbicMember = intro;
+        this.testPulbicMember = intro;
     }
 
-    public testPrivateMemberFunction(a: number): void {
-        // this.testPulbicMember;
+    public testPrivateMemberFunction(a: number): number {
+        this.testPrivateMember = a;
+        return this.testPrivateMember;
     }
 
-    // public testPrivateInPublic() {
-    //     return this.testPrivateMemberFunction();
-    // }
+    public testPrivateInPublic(): number {
+        return this.testPrivateMemberFunction(100);
+    }
 }
 
-let a = new TestClass('yo ho there you are');
-// a.testPrivateMemberFunction(30);
+const d = new TestClass('sayyesorno');
+d.testPrivateMemberFunction(30);
+
+// let b = new xyz.School();
+// let c = xyz.one;

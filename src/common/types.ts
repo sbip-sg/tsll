@@ -1,4 +1,4 @@
-import { Type, Value } from "llvm-node";
+import { Type, Value } from "@lungchen/llvm-node";
 import ts from "typescript";
 
 export function isString(val: any): val is string {

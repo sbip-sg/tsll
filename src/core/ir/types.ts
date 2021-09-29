@@ -1,4 +1,4 @@
-import { Value, AllocaInst, ConstantFP, GlobalVariable, Type, Function, BasicBlock, CallInst, Constant } from "llvm-node";
+import { Value, AllocaInst, ConstantFP, GlobalVariable, Type, Function, BasicBlock, CallInst, Constant } from "@lungchen/llvm-node";
 
 // Re-export these classes
 export { Value, AllocaInst, ConstantFP, GlobalVariable, Type, Function, BasicBlock };

@@ -12,7 +12,7 @@
                 "<node_internals>/**"
             ],
             "program": "${workspaceFolder}/src/cli.ts",
-            "args": ["${workspaceFolder}/test/ifStatement.ts"],
+            "args": ["${workspaceFolder}/test/arrayLiteral.ts"],
             "preLaunchTask": "npm: build",
             "outFiles": [
                 "${workspaceFolder}/**/*.js"

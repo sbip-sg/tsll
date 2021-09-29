@@ -4,10 +4,24 @@ import { Builder } from './core/ir/builder';
 import { Scope } from './common/scope';
 
 export function convert(files: string[], emitIR: boolean, bitcodeOutput?: string) {
-    
-    let program = ts.createProgram(files, {
+
+    const program = ts.createProgram(files, {
         target: ts.ScriptTarget.ES5
-    })
+    });
+
+    // Make sure all the declared dependencies have been analysed before our main source files.
+    // const fileSet = new Set(files);
+    // for (const srcFile of program.getSourceFiles()) {
+    //     if (!fileSet.has(srcFile.fileName)) 
+    // }
+
+    const diagnostics = ts.getPreEmitDiagnostics(program);
+    // Print out diagnostic messages
+    for (const diagnosis of diagnostics) {
+        console.log(diagnosis.messageText.toString());
+    }
+
+    if (diagnostics.length > 0) return;
 
     for (let file of files) {
         let srcFile = program.getSourceFile(file);
