@@ -1,6 +1,6 @@
 {
   "name": "@lungchen/tslah",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "LLVM frontend for TypeScript",
   "main": "./lib/converter.js",
   "bin": "./lib/cli.js",
@@ -40,7 +40,7 @@
   },
   "dependencies": {
     "@types/node": "^16.4.0",
-    "@lungchen/llvm-node": "^3.0.2",
+    "@lungchen/llvm-node": "^0.0.0",
     "yargs": "^17.0.1",
     "typescript": "^4.3.5"
   }
