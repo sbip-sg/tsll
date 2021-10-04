@@ -1,4 +1,4 @@
-import llvm from '@lungchen/llvm-node';
+import llvm, { ConstantInt } from '@lungchen/llvm-node';
 import { FunctionUndefinedError, SyntaxNotSupportedError, TypeUndefinedError } from "../../common/error";
 import { Type, Value, BasicBlock, isConstant } from "./types";
 
@@ -189,13 +189,16 @@ export class Builder {
     }
 
     public buildBasicBlock(parent?: llvm.Function, name?: string) {
-        let basicBlock: BasicBlock;
-        if (name === undefined) {
-            basicBlock = llvm.BasicBlock.create(this.llvmContext, name, parent);
-        } else {
-            basicBlock = llvm.BasicBlock.create(this.llvmContext, name, parent);
+        return llvm.BasicBlock.create(this.llvmContext, name, parent);
+    }
+
+    public buildSwitch(onVal: Value, defaultDest: BasicBlock, caseValues?: ConstantInt[], caseDests?: BasicBlock[]) {
+        const numCases = caseValues?.length || 0;
+        const switchInst = this.llvmBuilder.createSwitch(onVal, defaultDest, numCases);
+        if (caseValues === undefined || caseDests === undefined) return;
+        for (let i = 0; i < numCases; i++) {
+            switchInst.addCase(caseValues[i], caseDests[i]);
         }
-        return basicBlock;
     }
 
     public setCurrentBlock(basicBlock: BasicBlock) {
@@ -374,9 +377,7 @@ export class Builder {
         return llvm.Type.getIntNTy(this.llvmContext, numBits);
     }
 
-    public buildInvoke(callee: llvm.Value, args: llvm.Value[], normalDest: llvm.BasicBlock, unwindDest: llvm.BasicBlock) {
-        const calleeType = callee.type;
-        if (!calleeType.isFunctionTy()) throw new SyntaxNotSupportedError();
+    public buildInvoke(calleeType: llvm.FunctionType, callee: llvm.Value, args: llvm.Value[], normalDest: llvm.BasicBlock, unwindDest: llvm.BasicBlock) {
         return this.llvmBuilder.createInvoke(calleeType, callee, normalDest, unwindDest, args);
     }
 

@@ -1,10 +1,11 @@
-import ts from 'typescript';
+import ts, { UnaryExpression } from 'typescript';
 import { SyntaxNotSupportedError, InstantiateError, VariableUndefinedError, TypeUndefinedError } from '../../common/error';
 import { Builder } from '../ir/builder';
-import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst, isFunction } from '../ir/types';
+import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst, isFunction, isConstantInt } from '../ir/types';
 import { Scope } from '../../common/scope';
 import { isString, FunctionLikeDeclaration, Property, isStringArray, isBreak, isContinue, Break, Continue } from '../../common/types';
-import llvm from '@lungchen/llvm-node';
+import llvm, { BasicBlock, ConstantInt } from '@lungchen/llvm-node';
+import { emit } from 'process';
 
 export class Visitor {
 
@@ -41,7 +42,7 @@ export class Visitor {
         }
 
         this.builder.buildReturn();
-        this.builder.verifyModule();
+        // this.builder.verifyModule();
     }
 
     public visitVariableStatement(variableStatement: ts.VariableStatement, scope: Scope) {
@@ -325,48 +326,58 @@ export class Visitor {
         if (ts.isBreakStatement(statement)) return this.visitBreakStatement(statement, scope);
         if (ts.isSwitchStatement(statement)) this.visitSwitchStatement(statement, scope);
         if (ts.isTryStatement(statement)) this.visitTryStatement(statement, scope);
+        if (ts.isThrowStatement(statement)) this.visitThrowStatement(statement, scope);
     }
 
     public visitTryStatement(tryStatement: ts.TryStatement, scope: Scope) {
 
         const currentFunction = scope.getCurrentFunction();
-        const normalDest = this.builder.buildBasicBlock(currentFunction);
-        const unwindDest = this.builder.buildBasicBlock(currentFunction);
-        const resumeDest = this.builder.buildBasicBlock(currentFunction);
-        const finalDest = this.builder.buildBasicBlock(currentFunction);
-
+        const unwindDest = this.builder.buildBasicBlock(currentFunction, 'unwinding');
+        const resumeDest = this.builder.buildBasicBlock(currentFunction, 'resumption');
+        const finalDest = this.builder.buildBasicBlock(currentFunction, 'finally');
+        let normalDest: BasicBlock | undefined;
         for (const statement of tryStatement.tryBlock.statements) {
-            if (ts.isCallExpression(statement)) {
-                const name = this.visitExpression(statement.expression, scope);
+            if (ts.isExpressionStatement(statement) && ts.isCallExpression(statement.expression)) {
+                const callExpression = statement.expression;
+                const name = this.visitExpression(callExpression.expression, scope);
                 if (!isString(name)) throw new SyntaxNotSupportedError();
                 const fn = this.builder.getFunction(name);
                 let args: Value[] = [];
 
-                for (const argument of statement.arguments) {
+                for (const argument of callExpression.arguments) {
                     const visited = this.visitExpression(argument, scope);
                     const arg = this.resolveNameDefinition(visited, scope);
                     args.push(arg);
                 }
 
-                this.builder.buildInvoke(fn, args, normalDest, unwindDest);
+                if (normalDest !== undefined) this.builder.buildBranch(finalDest);
+
+                normalDest = this.builder.buildBasicBlock(currentFunction, 'normal');
+                this.builder.buildInvoke(fn.type.elementType, fn, args, normalDest, unwindDest);
                 this.builder.setCurrentBlock(normalDest);
             } else {
                 this.visitStatement(statement, scope);
             }
         }
 
+        if (normalDest !== undefined) this.builder.buildBranch(finalDest);
+
         const catchClause = tryStatement.catchClause;
         const finallyBlock = tryStatement.finallyBlock;
         let landingPad: llvm.LandingPadInst | undefined;
         if (catchClause !== undefined) {
             this.builder.setCurrentBlock(unwindDest);
-            const landingPad = this.builder.buildLandingPad(this.builder.buildIntType(8));
+            landingPad = this.builder.buildLandingPad(this.builder.buildIntType(8));
             if (catchClause.variableDeclaration !== undefined) {
                 const visitedVar = this.visitVariableDeclaration(catchClause.variableDeclaration, scope);
             }
 
-            this.visitBlock(catchClause.block, scope);
-            this.builder.buildBranch(resumeDest);
+            const returnValue = this.visitBlock(catchClause.block, scope);
+            if (returnValue !== undefined && isValue(returnValue)) {
+                this.builder.buildReturn(returnValue);
+            } else {
+                this.builder.buildBranch(resumeDest);
+            }
         } else {
             this.builder.buildBranch(finalDest);
         }
@@ -376,19 +387,48 @@ export class Visitor {
             this.builder.buildResume(landingPad);
         }
 
-        if (finallyBlock !== undefined) {
-            this.builder.setCurrentBlock(finalDest);
-            this.visitBlock(finallyBlock, scope);
-        }
+        this.builder.setCurrentBlock(finalDest);
+
+        if (finallyBlock !== undefined) this.visitBlock(finallyBlock, scope);
+
+
     }
 
     public visitThrowStatement(throwStatement: ts.ThrowStatement, scope: Scope) {
         const visited = this.visitExpression(throwStatement.expression, scope);
-        
+
     }
 
     public visitSwitchStatement(switchStatement: ts.SwitchStatement, scope: Scope) {
-        throw new SyntaxNotSupportedError();
+        const currentFunction = scope.getCurrentFunction();
+        const currentBlock = currentFunction.getEntryBlock();
+        if (currentBlock === null) throw new SyntaxNotSupportedError();
+        const visited = this.visitExpression(switchStatement.expression, scope);
+        const onVal = this.resolveNameDefinition(visited, scope);
+        let defaultDest = this.builder.buildBasicBlock(currentFunction);
+        let caseDests: BasicBlock[] = [];
+        let caseValues: ConstantInt[] = [];
+        for (const clause of switchStatement.caseBlock.clauses) {
+            if (ts.isCaseClause(clause)) {
+                const caseDest = this.builder.buildBasicBlock(currentFunction);
+                const visited = this.visitExpression(clause.expression, scope);
+                const caseValue = this.resolveNameDefinition(visited, scope);
+                if (!isConstantInt(caseValue)) continue;
+                caseDests.push(caseDest);
+                caseValues.push(caseValue);
+            } else if (ts.isDefaultClause(clause)) {
+                this.builder.setCurrentBlock(defaultDest);
+            } else {
+                throw new SyntaxNotSupportedError();
+            }
+
+            for (const statement of clause.statements) {
+                this.visitStatement(statement, scope);
+            }
+        }
+
+        this.builder.setCurrentBlock(currentBlock);
+        this.builder.buildSwitch(onVal, defaultDest, caseValues, caseDests);
     }
 
     public visitCaseClause(clause: ts.CaseClause, scope: Scope) {

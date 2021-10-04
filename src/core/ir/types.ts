@@ -1,4 +1,4 @@
-import { Value, AllocaInst, ConstantFP, GlobalVariable, Type, Function, BasicBlock, CallInst, Constant } from "@lungchen/llvm-node";
+import { Value, AllocaInst, ConstantFP, GlobalVariable, Type, Function, BasicBlock, CallInst, Constant, ConstantInt } from "@lungchen/llvm-node";
 
 // Re-export these classes
 export { Value, AllocaInst, ConstantFP, GlobalVariable, Type, Function, BasicBlock };
@@ -33,6 +33,10 @@ export function isConstantFP(val: any): val is ConstantFP {
 
 export function isConstant(val: any): val is Constant {
     return val instanceof Constant;
+}
+
+export function isConstantInt(val: any): val is ConstantInt {
+    return val instanceof ConstantInt;
 }
 
 export function isBasicBlock(val: any): val is BasicBlock {
