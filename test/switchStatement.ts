@@ -6,7 +6,7 @@ enum Personality {
 }
 
 class Person {
-    // New people are arrogan straight after graduation
+    // New people are arrogant straight after graduation
     public personality: Personality = Personality.Arrogant;
 }
 
