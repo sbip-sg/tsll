@@ -687,12 +687,14 @@ export class Visitor {
         if (typeArguments === undefined) {
             type = Visitor.generics.getTypeByName(typeName);
         } else {
-
+            // TODO change typename to wholename
             const types = typeArguments.map(typeArgument => this.visitTypeNode(typeArgument, scope)) as Type[];
             if (scope === undefined) throw new SyntaxNotSupportedError();
-
-            if (Visitor.generics.hasDeclared(typeName)) {
-                type = this.builder.getStructType(typeName);
+            
+            // Construct a whole name from typeName and types
+            const wholeName = Generics.constructWholeName(typeName, types);
+            if (Visitor.generics.hasDeclared(wholeName)) {
+                type = this.builder.getStructType(wholeName);
             } else {
                 type = Visitor.generics.createSpecificDeclaration(typeName, types, scope);
             }
@@ -1016,12 +1018,18 @@ export class Visitor {
 
     public visitClassDeclaration(classDeclaration: ts.ClassDeclaration, scope: Scope, specificTypes?: Type[]) {
         if (classDeclaration.name === undefined) throw new SyntaxNotSupportedError();
-        const className = classDeclaration.name.text;
-        
+        let className = classDeclaration.name.text;
+
         // If the class declaration is of generic type, save the declaration for later instantiation when specific type information is provided.
         if (classDeclaration.typeParameters !== undefined && !Visitor.generics.hasDeclaration(className)) {
             Visitor.generics.saveDeclaration(className, classDeclaration);
             return;
+        }
+
+        // Change the class name to a more specific class name
+        if (specificTypes !== undefined) {
+            // Construct a whole name from typeName and types
+            className = Generics.constructWholeName(className, specificTypes);
         }
 
         scope.enter(className);

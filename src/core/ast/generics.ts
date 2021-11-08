@@ -36,7 +36,8 @@ export class Generics {
         let structType: llvm.StructType | undefined;
         if (ts.isClassDeclaration(declaration)) structType = this.visitor.visitClassDeclaration(declaration, scope, types);
         if (structType === undefined) throw new TypeUndefinedError();
-        this.declaredNames.add(name);
+        const wholeName = Generics.constructWholeName(name, types);
+        this.declaredNames.add(wholeName);
         return structType;
     }
 
@@ -48,5 +49,11 @@ export class Generics {
         const type = this.typeParameterMap.get(name);
         if (type === undefined) throw new TypeUndefinedError();
         return type;
+    }
+
+    public static constructWholeName(name: string, types: Type[]) {
+        let wholeName = name;
+        types.every(type => wholeName = wholeName.concat(`_${type.toString()}`));
+        return wholeName;
     }
 }
