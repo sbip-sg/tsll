@@ -50,4 +50,4 @@ jobs:
           NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
         run: |
           npm config set //registry.npmjs.org/:_authToken=$NPM_PUBLISH_TOKEN
-          npm publish
+          npm publish --access public
