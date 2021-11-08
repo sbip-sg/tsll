@@ -22,7 +22,7 @@ class GenericClass<T> {
     }
 }
 
-// let typicalGeneric = new AnotherClass<number>(100);
+let typicalGeneric = new GenericClass<number>(100);
 let boolGeneric = new AnotherClass<string>('errc');
-let nestedGeneric = new GenericClass<AnotherClass<string>>(boolGeneric);
+let nestedGeneric = new AnotherClass<AnotherClass<string>>(boolGeneric);
 
