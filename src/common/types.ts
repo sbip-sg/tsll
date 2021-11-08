@@ -1,4 +1,4 @@
-import { Type, Value } from "@lungchen/llvm-node";
+import llvm, { Type, Value } from "@lungchen/llvm-node";
 import ts from "typescript";
 
 export function isString(val: any): val is string {
@@ -24,7 +24,7 @@ export type Unallocated = {
 
 export type Property = {
     propertyName: string;
-    propertyType: Type;
+    propertyType: Type | string;
     propertyValue?: Value;
 }
 
@@ -33,4 +33,25 @@ export class Break {
 }
 export class Continue {
 
+}
+
+export class Method {
+
+    constructor(private name: string, private parameterTypes: (llvm.Type | string)[], private parameterNames: string[], private returnType: llvm.Type | string) {}
+
+    public getParameterTypes() {
+        return this.parameterTypes;
+    }
+
+    public getParameterNames() {
+        return this.parameterNames;
+    }
+
+    public getReturnType() {
+        return this.returnType;
+    }
+
+    public getName() {
+        return this.name;
+    }
 }

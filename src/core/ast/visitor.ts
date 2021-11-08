@@ -1,16 +1,16 @@
-import ts, { UnaryExpression } from 'typescript';
-import { SyntaxNotSupportedError, InstantiateError, VariableUndefinedError, TypeUndefinedError } from '../../common/error';
+import ts from 'typescript';
+import { SyntaxNotSupportedError, InstantiateError, VariableUndefinedError, TypeUndefinedError, TypeMismatchError } from '../../common/error';
 import { Builder } from '../ir/builder';
 import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst, isFunction, isConstantInt } from '../ir/types';
 import { Scope } from '../../common/scope';
 import { isString, FunctionLikeDeclaration, Property, isStringArray, isBreak, isContinue, Break, Continue } from '../../common/types';
-import llvm, { BasicBlock, ConstantInt } from '@lungchen/llvm-node';
-import { emit } from 'process';
+import llvm, { BasicBlock, CallInst, ConstantInt, StructType } from '@lungchen/llvm-node';
+import { Generics } from './generics';
 
 export class Visitor {
-
     private builder: Builder;
     private static visitor: Visitor;
+    private static generics: Generics;
 
 
     private constructor(builder: Builder) {
@@ -21,6 +21,7 @@ export class Visitor {
 
         if (builder !== undefined) {
             if (this.visitor === undefined) this.visitor = new Visitor(builder);
+            this.generics = new Generics(this.visitor);
         } else {
             if (this.visitor === undefined) throw new InstantiateError();
         }
@@ -42,7 +43,7 @@ export class Visitor {
         }
 
         this.builder.buildReturn();
-        // this.builder.verifyModule();
+        this.builder.verifyModule();
     }
 
     public visitVariableStatement(variableStatement: ts.VariableStatement, scope: Scope) {
@@ -202,16 +203,17 @@ export class Visitor {
     }
 
     public visitFunctionDeclaration(functionDeclaration: ts.FunctionDeclaration, scope: Scope) {
-        const fn = this.visitFunctionLikeDeclaration(functionDeclaration, scope);
-        scope.set(fn.name, fn);
+        this.visitFunctionLikeDeclaration(functionDeclaration, scope);
     }
 
     public visitFunctionLikeDeclaration(functionLikeDeclaration: FunctionLikeDeclaration, scope: Scope) {
+        const lastFunction = scope.getCurrentFunction();
+        const modifiers = functionLikeDeclaration.modifiers;
 
         if (functionLikeDeclaration.name !== undefined && !ts.isIdentifier(functionLikeDeclaration.name)) throw new SyntaxNotSupportedError();
         if (functionLikeDeclaration.type === undefined) throw new SyntaxNotSupportedError();
 
-        let returnType = this.visitTypeNode(functionLikeDeclaration.type);
+        let returnType = this.visitTypeNode(functionLikeDeclaration.type, scope);
         let functionName = functionLikeDeclaration.name?.text || 'noname';
         let parameterTypes: Type[] = [];
         let parameterNames: string[] = [];
@@ -229,16 +231,38 @@ export class Visitor {
             }
 
             if (parameter.type === undefined) throw new SyntaxNotSupportedError();
-            let parameterType = this.visitTypeNode(parameter.type);
+            let parameterType = this.visitTypeNode(parameter.type, scope);
             parameterTypes.push(parameterType);
         }
 
-        let currentScopeName = scope.getCurrentScopeName();
+        const currentScopeName = scope.getCurrentScopeName();
         scope.setDefaultValues(`${currentScopeName}${functionName}`, defaultValues);
 
-        let fn = this.builder.buildFunction(`${currentScopeName}${functionName}`, returnType, parameterTypes, parameterNames);
+        const fn = this.builder.buildFunction(`${functionName}`, returnType, parameterTypes, parameterNames);
         scope.enter(functionName, fn);
-        
+
+        let modifierIdx = 0;
+        let coroId: CallInst | undefined;
+        let coroHandler: CallInst | undefined;
+        while (modifiers !== undefined && modifierIdx < modifiers.length) {
+            // For now, only one kind of modifier is recognized.
+            switch (modifiers[modifierIdx].kind) {
+                case ts.SyntaxKind.AsyncKeyword:
+                    const alignment = this.builder.buildInteger(0, 32);
+                    const nullPtr = this.builder.buildNullPtr();
+                    coroId = this.builder.buildFunctionCall('llvm.coro.id', [alignment, nullPtr, nullPtr, nullPtr]);
+                    const coroFrame = this.builder.buildFunctionCall('llvm.coro.frame', []);
+                    coroHandler = this.builder.buildFunctionCall('llvm.coro.begin', [coroId, coroFrame]);
+                    break;
+                default:
+                    throw new SyntaxNotSupportedError();
+            }
+            ++modifierIdx;
+        }
+
+        // For future reference
+        if (coroHandler !== undefined) scope.set('coro.handler', coroHandler);
+
         // In the current scope, initialize the parameter names of a function with the arguments received from a caller
         for (let i = 0; i < parameterNames.length; i++) {
             let newAlloca = this.builder.buildAlloca(parameterTypes[i]);
@@ -249,6 +273,8 @@ export class Visitor {
         let returnValue: Value | Break | Continue | undefined;
         if (functionLikeDeclaration.body !== undefined) returnValue = this.visitBlock(functionLikeDeclaration.body, scope);
         if (returnValue === undefined || isValue(returnValue)) {
+            // Determine whether a suspended coroutine is at its final point.
+            if (coroHandler !== undefined) this.builder.buildFunctionCall('llvm.coro.destroy', [coroHandler]);
             this.builder.buildReturn(returnValue);
         }
 
@@ -257,12 +283,11 @@ export class Visitor {
         // Return to the last scope
         scope.leave(fn);
 
-        let currentFunction = scope.getCurrentFunction();
-        let currentBlock = currentFunction.getEntryBlock();
-        if (!isBasicBlock(currentBlock)) throw new SyntaxNotSupportedError();
-        this.builder.setCurrentBlock(currentBlock);
-
+        const entryBlock = lastFunction.getEntryBlock();
+        if (!isBasicBlock(entryBlock)) throw new SyntaxNotSupportedError();
+        this.builder.setCurrentBlock(entryBlock);
         return fn;
+
     }
 
     public visitExpressionStatement(expressionStatement: ts.ExpressionStatement, scope: Scope) {
@@ -450,13 +475,13 @@ export class Visitor {
                 if (member.type === undefined) throw new SyntaxNotSupportedError();
 
                 let propertyName = this.visitPropertyName(member.name);
-                let returnType = this.visitTypeNode(member.type);
+                let returnType = this.visitTypeNode(member.type, scope);
                 let parameterTypes: Type[] = [];
                 let parameterNames: string[] = [];
                 for (let parameter of member.parameters) {
                     if (parameter.type === undefined) throw new SyntaxNotSupportedError();
                     let parameterName = this.visitBindingName(parameter.name, scope);
-                    let parameterType = this.visitTypeNode(parameter.type);
+                    let parameterType = this.visitTypeNode(parameter.type, scope);
                     parameterNames.push(parameterName);
                     parameterTypes.push(parameterType);
                 }
@@ -469,7 +494,7 @@ export class Visitor {
             if (ts.isPropertySignature(member)) {
                 if (member.type === undefined) throw new SyntaxNotSupportedError();
                 let propertyName = this.visitPropertyName(member.name);
-                let propertyType = this.visitTypeNode(member.type);
+                let propertyType = this.visitTypeNode(member.type, scope);
                 elementTypes.push(propertyType);
                 elementNames.push(propertyName);
             }
@@ -568,8 +593,44 @@ export class Visitor {
     }
 
     public visitAwaitExpression(awaitExpression: ts.AwaitExpression, scope: Scope) {
-        // build some coroutine
-        return this.visitExpression(awaitExpression.expression, scope);
+        const currentScopeName = scope.getCurrentScopeName();
+        const currentFunction = scope.getCurrentFunction();
+        const lastBlock = this.builder.getCurrentBlock();
+
+        const coroHandler = scope.get('coro.handler');
+
+        // With 'llvm.coro.save' and 'llvm.coro.suspend', the current coroutine resumes once asyncFn is finished.
+        const coroSave = this.builder.buildFunctionCall('llvm.coro.save', [coroHandler]);
+        scope.set('coro.save', coroSave);
+        const returnValue = this.visitExpression(awaitExpression.expression, scope);
+
+        // Make sure the returned asyncFn is a Value.
+        if (!isValue(returnValue)) throw new TypeMismatchError();
+
+
+        const boolConstant = this.builder.buildBoolean(false);
+        const coroSuspend = this.builder.buildFunctionCall('llvm.coro.suspend', [coroSave, boolConstant]);
+        const nextBlock = this.builder.buildBasicBlock(currentFunction);
+        const suspendBlock = this.builder.buildBasicBlock(currentFunction);
+        this.builder.setCurrentBlock(suspendBlock);
+        this.builder.buildFunctionCall('llvm.coro.end', [coroHandler, boolConstant]);
+        this.builder.buildReturn();
+        const cleanupBlock = this.builder.buildBasicBlock(currentFunction);
+        this.builder.setCurrentBlock(cleanupBlock);
+        this.builder.buildFunctionCall('llvm.coro.free', [coroSave, coroHandler]);
+        this.builder.buildBranch(suspendBlock);
+
+        const constant0 = this.builder.buildInteger(0, 8);
+        const constant1 = this.builder.buildInteger(1, 8);
+        const caseValues = [constant0, constant1];
+        const caseDests = [nextBlock, cleanupBlock];
+
+
+        this.builder.setCurrentBlock(lastBlock);
+        this.builder.buildSwitch(coroSuspend, suspendBlock, caseValues, caseDests);
+        this.builder.setCurrentBlock(nextBlock);
+
+        return returnValue;
     }
 
     public visitToken(token: ts.Expression, scope: Scope) {
@@ -612,29 +673,70 @@ export class Visitor {
         return this.visitFunctionLikeDeclaration(functionExpression, scope);
     }
 
-    public visitNewExpression(newExpression: ts.NewExpression, scope: Scope) {
-        let visited = this.visitExpression(newExpression.expression, scope);
-        
-        let structType = this.builder.getStructType(visited as string);
+    public visitEntityName(entityName: ts.EntityName) {
+        // TODO: REMOVE THE FOLLOWING SCOPE LATER.
+        const scope = new Scope();
+        if (ts.isIdentifier(entityName)) return this.visitIdentifier(entityName, scope);
+        throw new SyntaxNotSupportedError();
+    }
 
-        let allocaValue = this.builder.buildAlloca(structType, undefined, structType.name);
-
-        // TODO: Match the parameters of a constructor with the arguments given for class instantiation
-        if (newExpression.arguments === undefined || newExpression.arguments.length === 0) {
-            this.builder.buildFunctionCall(`${structType.name}_DefaultConstructor`, [allocaValue], new Map());
+    public visitTypeReference(typeReference: ts.TypeReferenceNode, scope?: Scope) {
+        const typeName = this.visitEntityName(typeReference.typeName);
+        const typeArguments = typeReference.typeArguments;
+        let type: Type;
+        if (typeArguments === undefined) {
+            type = Visitor.generics.getTypeByName(typeName);
         } else {
-            let defaultValues = scope.getDefaultValues(`${structType.name}_Constructor`);
-            // First argument of any member function calls is always a pointer to a struct type
-            // In this case, we are creating a class instance using the new operator, and calling an appropriate constructor
-            let values: Value[] = [allocaValue];
-            for (let argument of newExpression.arguments) {
-                let argVisited = this.visitExpression(argument, scope);
-                let value = this.resolveNameDefinition(argVisited, scope);
-                values.push(value);
-            }
 
-            this.builder.buildFunctionCall(`${structType.name}_Constructor`, values, defaultValues);
+            const types = typeArguments.map(typeArgument => this.visitTypeNode(typeArgument, scope)) as Type[];
+            if (scope === undefined) throw new SyntaxNotSupportedError();
+
+            if (Visitor.generics.hasDeclared(typeName)) {
+                type = this.builder.getStructType(typeName);
+            } else {
+                type = Visitor.generics.createSpecificDeclaration(typeName, types, scope);
+            }
         }
+        if (type.isStructTy()) {
+            return this.builder.buildPointerType(type);
+        } else {
+            return type;
+        }
+
+    }
+
+    public visitNewExpression(newExpression: ts.NewExpression, scope: Scope) {
+        const name = this.visitExpression(newExpression.expression, scope);
+        if (!isString(name)) throw new TypeMismatchError();
+
+        let structType: StructType | undefined;
+        const typeArguments = newExpression.typeArguments;
+        if (typeArguments !== undefined) {
+            const types = typeArguments.map(typeArgument => this.visitTypeNode(typeArgument, scope)) as Type[];
+            // Specify the name of a generic type and its specific types
+            structType = Visitor.generics.createSpecificDeclaration(name, types, scope);
+        } else {
+            structType = this.builder.getStructType(name);
+        }
+
+        const allocaValue = this.builder.buildAlloca(structType, undefined, structType.name);
+
+            // TODO: Match the parameters of a constructor with the arguments given for class instantiation
+            if (newExpression.arguments === undefined || newExpression.arguments.length === 0) {
+                this.builder.buildFunctionCall(`${structType.name}_DefaultConstructor`, [allocaValue]);
+            } else {
+                const defaultValues = scope.getDefaultValues(`${structType.name}_Constructor`);
+                // First argument of any member function calls is always a pointer to a struct type
+                // In this case, we are creating a class instance using the new operator, and calling an appropriate constructor
+                let values: Value[] = [allocaValue];
+                for (const argument of newExpression.arguments) {
+                    let argVisited = this.visitExpression(argument, scope);
+                    let value = this.resolveNameDefinition(argVisited, scope);
+                    values.push(value);
+                }
+
+                this.builder.buildFunctionCall(`${structType.name}_Constructor`, values, defaultValues);
+            }
 
         return allocaValue;
     }
@@ -890,7 +992,7 @@ export class Visitor {
         return this.builder.buildNumber(num);
     }
 
-    public visitTypeNode(typeNode?: ts.TypeNode) {
+    public visitTypeNode(typeNode?: ts.TypeNode, scope?: Scope) {
         if (typeNode === undefined) return this.builder.buildAnyType();
         switch (typeNode.kind) {
             case ts.SyntaxKind.NumberKeyword:
@@ -905,14 +1007,22 @@ export class Visitor {
                 return this.builder.buildStructType('');
             case ts.SyntaxKind.AnyKeyword:
                 return this.builder.buildAnyType();
+            case ts.SyntaxKind.TypeReference:
+                return this.visitTypeReference(typeNode as ts.TypeReferenceNode, scope);
             default:
                 throw new SyntaxNotSupportedError();
         }
     }
 
-    public visitClassDeclaration(classDeclaration: ts.ClassDeclaration, scope: Scope) {
+    public visitClassDeclaration(classDeclaration: ts.ClassDeclaration, scope: Scope, specificTypes?: Type[]) {
         if (classDeclaration.name === undefined) throw new SyntaxNotSupportedError();
-        let className = classDeclaration.name.text;
+        const className = classDeclaration.name.text;
+        
+        // If the class declaration is of generic type, save the declaration for later instantiation when specific type information is provided.
+        if (classDeclaration.typeParameters !== undefined && !Visitor.generics.hasDeclaration(className)) {
+            Visitor.generics.saveDeclaration(className, classDeclaration);
+            return;
+        }
 
         scope.enter(className);
 
@@ -926,17 +1036,32 @@ export class Visitor {
             if (ts.isConstructorDeclaration(member)) constructorDeclarations.push(member);
         }
 
-        let propertyTypes: Type[] = [];
+        // Build mappings of type parameters to specific types
+        const typeParameterMap = new Map<string, llvm.Type>();
+        if (classDeclaration.typeParameters !== undefined && specificTypes !== undefined) {
+            const typeParameters = classDeclaration.typeParameters;
+            for (let i = 0; i < typeParameters.length; i++) {
+                typeParameterMap.set(typeParameters[i].name.text, specificTypes[i]);
+            }
+            Visitor.generics.replaceTypeParameters(typeParameterMap);
+        }
+
+        // Construct the information about each class property
+        let properties: Property[] = [];
+        let propertyTypes: llvm.Type[] = [];
         let propertyNames: string[] = [];
         for (let propertyDeclaration of propertyDeclarations) {
             const property = this.visitPropertyDeclaration(propertyDeclaration, scope);
-            propertyTypes.push(property.propertyType);
+            properties.push(property);
+
+            const propertyType = property.propertyType;
+            propertyTypes.push(property.propertyType as Type);
             propertyNames.push(property.propertyName);
         }
 
         // Build a struct type with the class name
         const structType = this.builder.buildStructType(className);
-        // Inser property types into the struct type created above 
+        // Insert property types into the struct type created above
         this.builder.insertProperty(className, propertyTypes, propertyNames);
 
         for (let constructorDeclaration of constructorDeclarations) {
@@ -955,13 +1080,15 @@ export class Visitor {
         }
 
         scope.leave();
+
+        return structType;
     }
 
     public visitPropertyDeclaration(propertyDeclaration: ts.PropertyDeclaration, scope: Scope) {
 
         if (propertyDeclaration.type === undefined) throw new SyntaxNotSupportedError();
         let propertyName = this.visitPropertyName(propertyDeclaration.name);
-        let propertyType = this.visitTypeNode(propertyDeclaration.type);
+        const propertyType = this.visitTypeNode(propertyDeclaration.type, scope);
 
         let property: Property = {
             propertyName,
@@ -988,7 +1115,8 @@ export class Visitor {
 
         if (methodDeclaration.type === undefined) throw new SyntaxNotSupportedError();
         let methodName = this.visitPropertyName(methodDeclaration.name);
-        let returnType = this.visitTypeNode(methodDeclaration.type);
+        let returnType = this.visitTypeNode(methodDeclaration.type, scope);
+        if (returnType.isPointerTy()) returnType = this.builder.buildPointerType(returnType);
         let className = scope.getCurrentScopeName();
         let parameterTypes: Type[] = [];
         let parameterNames: string[] = [];
@@ -1006,7 +1134,7 @@ export class Visitor {
             }
 
             if (parameter.type === undefined) throw new SyntaxNotSupportedError();
-            let parameterType = this.visitTypeNode(parameter.type);
+            let parameterType = this.visitTypeNode(parameter.type, scope);
             parameterTypes.push(parameterType);
         }
 
@@ -1067,7 +1195,7 @@ export class Visitor {
                 defaultValues.set(parameterName, value);
             }
 
-            let parameterType = this.visitTypeNode(parameter.type);
+            let parameterType = this.visitTypeNode(parameter.type, scope);
             parameterTypes.push(parameterType);
         }
 

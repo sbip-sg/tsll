@@ -1,5 +1,6 @@
-import llvm, { ConstantInt } from '@lungchen/llvm-node';
+import llvm, { CallInst, ConstantInt, StructType } from '@lungchen/llvm-node';
 import { FunctionUndefinedError, SyntaxNotSupportedError, TypeUndefinedError } from "../../common/error";
+import { Generics } from '../ast/generics';
 import { Type, Value, BasicBlock, isConstant } from "./types";
 
 export class Builder {
@@ -92,22 +93,29 @@ export class Builder {
         return llvm.Type.getInt8PtrTy(this.llvmContext);
     }
 
-    public buildFunctionCall(name: string, parameters: Value[], defaultValues: Map<string, Value>) {
-        let fn = this.llvmModule.getFunction(name);
+    public getIntrinsic(name: string) {
+        const intrinsicId = llvm.Function.lookupIntrinsicID(name);
+        if (intrinsicId === 0) return undefined;
+        return llvm.Intrinsic.getDeclaration(this.llvmModule, intrinsicId);
+    }
 
+    public buildFunctionCall(name: string, parameters: Value[], defaultValues?: Map<string, Value>) {
+        let fn = this.llvmModule.getFunction(name);
+        let intrinsicFn = this.getIntrinsic(name);
+        if (fn === undefined) fn = intrinsicFn;
         if (fn === undefined) throw new FunctionUndefinedError();
 
         // The following checks if parameter types match argument types as defined for a function
         let args = fn.getArguments();
         let anyType = this.buildAnyType();
-        for (let i = 1; i < args.length; i++) {
+        for (let i = 1; defaultValues !== undefined && i < args.length; i++) {
             if (i >= parameters.length) {
                 let defaultValue = defaultValues.get(args[i].name);
                 if (defaultValue === undefined) throw new FunctionUndefinedError();
                 parameters.push(defaultValue);
                 continue;
             }
-            if (!args[i].type.equals(parameters[i].type) && !args[i].type.equals(anyType)) throw new FunctionUndefinedError();
+            // if (!args[i].type.equals(parameters[i].type) && !args[i].type.equals(anyType)) throw new FunctionUndefinedError();
         }
 
         return this.llvmBuilder.createCall(fn.type.elementType, fn, parameters);
@@ -275,10 +283,10 @@ export class Builder {
         this.structMap.set(name, names);
     }
 
-    public getStructType(name: string) {
-        let structType = this.llvmModule.getTypeByName(name);
-        if (structType === null) throw new TypeUndefinedError();
-        return structType;
+    public getStructType(name: string, types?: Type[]) {
+        const structType = this.llvmModule.getTypeByName(name);
+        if (structType !== null) return structType;
+        throw new TypeUndefinedError();
     }
 
     public getLastStructType() {
@@ -383,6 +391,10 @@ export class Builder {
 
     public buildResume(value: llvm.Value) {
         return this.llvmBuilder.createResume(value);
+    }
+
+    public buildNullPtr() {
+        return llvm.ConstantPointerNull.get(llvm.Type.getInt8PtrTy(this.llvmContext));
     }
 
     public getFunction(name: string) {
