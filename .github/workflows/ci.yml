@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Install LLVM
-        run: run: |
+        run: |
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key|sudo apt-key add -
           echo "deb http://apt.llvm.org/focal/ llvm-toolchain-focal-13 main" | sudo tee -a /etc/apt/sources.list
           sudo apt-get update -qq
