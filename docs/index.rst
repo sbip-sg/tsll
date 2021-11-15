@@ -15,10 +15,7 @@ Contents
 
 .. toctree::
    :maxdepth: 2
-   :caption: Installation
+   :caption: TypescriptLlvm
 
    installation.rst
-
-   :caption: Development
-
    development.rst
