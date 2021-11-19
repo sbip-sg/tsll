@@ -1,6 +1,6 @@
 {
   "name": "@lungchen/typescriptllvm",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "LLVM frontend for TypeScript",
   "main": "./lib/converter.js",
   "bin": "./lib/cli.js",
