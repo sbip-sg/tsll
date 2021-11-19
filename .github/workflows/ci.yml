@@ -39,6 +39,7 @@ jobs:
           npm install
   tsc_compile:
     name: Compile test cases in typescript to javascript
+    needs: install
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -55,6 +56,7 @@ jobs:
 
   tsll_compile:
     name: Compile test cases in typescript to LLVM IR
+    needs: install
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
