@@ -53,6 +53,11 @@ jobs:
         run: npm install --ignore-scripts
       - name: Compile test cases
         run: ./scripts/tsc_compilation.py --outDir $JS_DIR $TS_DIR
+      - name: Cache directory
+        uses: actions/cache@v2
+        with:
+          path: $JS_DIR
+          key: ${{ runner.os }}-${{ hashFiles('**/lockfiles') }}
 
   tsll_compile:
     name: Compile test cases in typescript to LLVM IR
@@ -70,6 +75,11 @@ jobs:
         run: npm install --ignore-scripts
       - name: Compile test cases
         run: ./scripts/tsll_compilation.py --outDir $LL_DIR $TS_DIR
+      - name: Cache directory
+        uses: actions/cache@v2
+        with:
+          path: $LL_DIR
+          key: ${{ runner.os }}-${{ hashFiles('**/lockfiles') }}
   
   test:
     name: Run unit tests against code
