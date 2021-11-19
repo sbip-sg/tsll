@@ -3,12 +3,18 @@ on:
   push:
     branches:
       - main
+      - lch-testsuite
   pull_request:
     branches:
       - main
+env:
+  JS_DIR: js_dir
+  LL_DIR: ll_dir
+  TS_DIR: test
+
 jobs:
-  test:
-    name: Run unit tests against code
+  install:
+    name: Install environment
     runs-on: ubuntu-latest
     steps:
       - name: Install LLVM
@@ -31,8 +37,58 @@ jobs:
           npm config set //registry.npmjs.org/:_authToken=$NPM_PUBLISH_TOKEN
           npm config set cmake_LLVM_DIR=$(/usr/bin/llvm-config-13 --cmakedir)
           npm install
+  tsc_compile:
+    name: Compile test cases in typescript to javascript
+    runs-on: ubuntu-lastest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      - name: Setup npm cache
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14.17.3'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+      - name: Compile test cases
+        run: ./tsc_compilation.py --outDir $JS_DIR $TS_DIR
+
+  tsll_compile:
+    name: Compile test cases in typescript to LLVM IR
+    runs-on: ubuntu-lastest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      - name: Setup npm cache
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14.17.3'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+      - name: Compile test cases
+        run: ./tsll_compilation.py --outDir $LL_DIR $TS_DIR
+  
+  test:
+    name: Run unit tests against code
+    needs: [tsc_compile, tsll_compile]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      - name: Setup npm cache
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14.17.3'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm install --ignore-scripts
       - name: Test code changes
-        run: npm test
+        run: |
+          npm test
+          ./test_runner.py --jsDir $JS_DIR --tsllDir $LL_DIR
+
+  
   publish:
     name: Publish this npm project
     needs: test
