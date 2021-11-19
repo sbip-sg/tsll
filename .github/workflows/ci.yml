@@ -92,7 +92,7 @@ jobs:
       - name: Install dependencies
         run: |
           npm config set cmake_LLVM_DIR=$(/usr/bin/llvm-config-13 --cmakedir)
-          npm install --ignore-scripts
+          npm install
       - name: Test code changes
         run: |
           npm test
