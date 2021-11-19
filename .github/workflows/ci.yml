@@ -52,7 +52,7 @@ jobs:
       - name: Install dependencies
         run: npm install --ignore-scripts
       - name: Compile test cases
-        run: ./tsc_compilation.py --outDir $JS_DIR $TS_DIR
+        run: ./scripts/tsc_compilation.py --outDir $JS_DIR $TS_DIR
 
   tsll_compile:
     name: Compile test cases in typescript to LLVM IR
@@ -69,7 +69,7 @@ jobs:
       - name: Install dependencies
         run: npm install --ignore-scripts
       - name: Compile test cases
-        run: ./tsll_compilation.py --outDir $LL_DIR $TS_DIR
+        run: ./scripts/tsll_compilation.py --outDir $LL_DIR $TS_DIR
   
   test:
     name: Run unit tests against code
@@ -88,7 +88,7 @@ jobs:
       - name: Test code changes
         run: |
           npm test
-          ./test_runner.py --jsDir $JS_DIR --tsllDir $LL_DIR
+          ./scripts/test_runner.py --jsDir $JS_DIR --llDir $LL_DIR
 
   
   publish:
