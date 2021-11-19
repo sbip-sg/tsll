@@ -45,7 +45,8 @@ def main():
     results = []
     # Compile these programs with tsll compiler
     for filepath in ts_filepaths:
-        bitcode_filepath = filepath.removesuffix('.ts') + '.bc'
+        # Remove .ts suffix from filename
+        bitcode_filepath = filepath[:-3] + '.bc'
         result = pool.apply_async(run_task, ['npm', 'start', filepath, '--', '--outDir', output_dir, '--emitBitcode', bitcode_filepath])
         results.append(result)
 
