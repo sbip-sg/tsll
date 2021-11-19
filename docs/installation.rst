@@ -10,6 +10,8 @@ Dependencies
 
      npm config set cmake_LLVM_DIR $(path-to-llvm/bin/llvm-config --cmakedir)
 
+     sudo npm config set cmake_LLVM_DIR $(path-to-llvm/bin/llvm-config --cmakedir) --global
+
 Global installation
 ^^^^^^^^^^^^^^^^^^^^^
 
@@ -17,9 +19,12 @@ Global installation
 
   .. code-block:: sh
 
-     sudo npm install -g @lungchen/typescriptllvm
+     sudo -E npm install -g @lungchen/typescriptllvm
 
-  After this step, it can be run globally by the command ``typescriptllvm``
+  Note that remember to add ``-E`` after ``sudo`` in the above command to ensure
+  the custom LLVM setting is copied to the root environment.
+
+  After this step, it can be run globally by the command ``typescriptllvm``.
 
 Local installation
 ^^^^^^^^^^^^^^^^^^^^
