@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import * as fs from 'fs';
 import yargs from 'yargs/yargs';
 import { convert } from './converter';
 // Provide command line options
@@ -16,6 +17,13 @@ const options = {
         string: true,
         default: 'llvm.bc',
         require: false
+    },
+    'outDir': {
+        describe: 'Output bitcode file to a specific directory',
+        requiresArg: false,
+        string: true,
+        default: 'll_dir',
+        require: false
     }
 };
 // Extract arguments given the options
@@ -25,6 +33,10 @@ const argv = yargs(process.argv.slice(2)).options(options).help().string('_').ch
     if (filePaths.length === 0) throw new Error('At least one file should be provided.');
     return true;
 }).parseSync();
+
+// Create output directory
+if (!fs.existsSync(argv.outDir)) fs.mkdirSync(argv.outDir);
+
 // convert a list of input files to IR or Bitcode file
-convert(argv._ as string[], argv.emitIR, argv.emitBitcode);
+convert(argv._ as string[], argv.emitIR, argv.outDir + '/' + argv.emitBitcode);
 
