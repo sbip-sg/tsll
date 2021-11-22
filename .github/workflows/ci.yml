@@ -4,10 +4,10 @@ on:
     tags-ignore:
       - '**'
     branches:
-      - *
+      - '**'
   pull_request:
     branches:
-      - *
+      - '**'
 jobs:
   test:
     name: Run unit tests against code
