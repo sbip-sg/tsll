@@ -33,25 +33,25 @@ jobs:
           npm install
       - name: Test code changes
         run: npm test
-  publish:
-    name: Publish this npm project
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v2
-      - name: Setup npm cache
-        uses: actions/setup-node@v2
-        with:
-          node-version: '14.17.3'
-          cache: 'npm'
-      - name: Install dependencies
-        run: npm install --ignore-scripts
-      - name: Build a lib and bin
-        run: npm run build
-      - name: Publish pacakge
-        env:
-          NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-        run: |
-          npm config set //registry.npmjs.org/:_authToken=$NPM_PUBLISH_TOKEN
-          npm publish --access public
+  # publish:
+  #   name: Publish this npm project
+  #   needs: test
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v2
+  #     - name: Setup npm cache
+  #       uses: actions/setup-node@v2
+  #       with:
+  #         node-version: '14.17.3'
+  #         cache: 'npm'
+  #     - name: Install dependencies
+  #       run: npm install --ignore-scripts
+  #     - name: Build a lib and bin
+  #       run: npm run build
+  #     - name: Publish pacakge
+  #       env:
+  #         NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+  #       run: |
+  #         npm config set //registry.npmjs.org/:_authToken=$NPM_PUBLISH_TOKEN
+  #         npm publish --access public
