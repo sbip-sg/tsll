@@ -1,8 +1,6 @@
 name: CD
 on:
   push:
-    branches-ignore:
-      - '**'
     tags:
       - '**'
 jobs:
@@ -39,6 +37,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
+      - name: Setup npm cache
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14.17.3'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+      - name: Build a lib and bin
+        run: npm run build
       - name: Publish this pacakge
         env:
           NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
