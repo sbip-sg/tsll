@@ -1,7 +1,7 @@
 {
-  "name": "@lungchen/typescriptllvm",
+  "name": "tsll",
   "version": "0.0.4",
-  "description": "LLVM frontend for TypeScript",
+  "description": "Compiler frontend for translating Typescript to LLVM IR",
   "main": "./lib/converter.js",
   "bin": "./lib/cli.js",
   "scripts": {
