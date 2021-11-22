@@ -30,7 +30,7 @@ jobs:
         run: |
           npm config set //registry.npmjs.org/:_authToken=$NPM_PUBLISH_TOKEN
           npm config set cmake_LLVM_DIR=$(/usr/bin/llvm-config-13 --cmakedir)
-          npm install
+          npm ci
       - name: Test code changes
         run: npm test
   # publish:
