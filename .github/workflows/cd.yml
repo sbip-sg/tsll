@@ -4,7 +4,7 @@ push:
   branches:
     - main
   tags:
-    - '**'
+    - 'v*'
 jobs:
   test:
     name: Run unit tests against code
