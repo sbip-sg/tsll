@@ -38,7 +38,9 @@ jobs:
 
 name: CD
 on:
-push: [tags]
+push: 
+  tags:
+    - '**'
 jobs:
   test:
     name: Run unit tests against code
