@@ -1,10 +1,10 @@
 name: CD
 on:
-push:
-  branches:
-    - main
-  tags:
-    - 'v*'
+  push:
+    branches:
+      - main
+    tags:
+      - '**'
 jobs:
   test:
     name: Run unit tests against code
