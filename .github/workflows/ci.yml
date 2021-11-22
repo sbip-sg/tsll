@@ -1,8 +1,6 @@
 name: CI
 on:
   push:
-    tags-ignore:
-      - '**'
     branches:
       - '**'
   pull_request:
@@ -35,48 +33,3 @@ jobs:
           npm ci
       - name: Test code changes
         run: npm test
-
-# name: CD
-# on:
-# push: 
-#   tags:
-#     - '**'
-# jobs:
-#   test:
-#     name: Run unit tests against code
-#     runs-on: ubuntu-latest
-#     steps:
-#       - name: Install LLVM
-#         run: |
-#           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key|sudo apt-key add -
-#           echo "deb http://apt.llvm.org/focal/ llvm-toolchain-focal-13 main" | sudo tee -a /etc/apt/sources.list
-#           sudo apt-get update -qq
-#           sudo apt-get install libllvm13 llvm-13 llvm-13-dev
-#       - name: Checkout repository
-#         uses: actions/checkout@v2
-#       - name: Setup npm cache
-#         uses: actions/setup-node@v2
-#         with:
-#           node-version: '14.17.3'
-#           cache: 'npm'
-#       - name: Install dependencies
-#         env:
-#           NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-#         run: |
-#           npm config set //registry.npmjs.org/:_authToken=$NPM_PUBLISH_TOKEN
-#           npm config set cmake_LLVM_DIR=$(/usr/bin/llvm-config-13 --cmakedir)
-#           npm ci
-#       - name: Test code changes
-#         run: npm test
-#   publish:
-#     name: Publish this npm project
-#     runs-on: ubuntu-latest
-#     steps:
-#       - name: Checkout repository
-#         uses: actions/checkout@v2
-#       - name: Publish this pacakge
-#         env:
-#           NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-#         run: |
-#           npm config set //registry.npmjs.org/:_authToken=$NPM_PUBLISH_TOKEN
-#           npm publish

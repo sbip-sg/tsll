@@ -1,8 +1,8 @@
 name: CD
 on:
   push:
-    branches:
-      - main
+    branches-ignore:
+      - '**'
     tags:
       - '**'
 jobs:
@@ -34,6 +34,7 @@ jobs:
         run: npm test
   publish:
     name: Publish this npm project
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
