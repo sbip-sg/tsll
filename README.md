@@ -1,6 +1,6 @@
-[![Actions Status](https://github.com/sbip-sg/typescriptllvm/workflows/CI/badge.svg)](https://github.com/sbip-sg/typescriptllvm/actions)
-## What is typescriptllvm?
-typescriptllvm is a TypeScript frontend written in TypeScript for LLVM IR generation. For now, this work is mainly used for blockchain smart contract verification. Before we transpile Node.js code in Typescript into Javascript artifacts, Typescriptllvm combined with other backend analysis tools provides a powerful framework to search for vulnerabilities and security issues as smart contract developers would not realize while writing such smart contracts.
+[![Actions Status](https://github.com/sbip-sg/tsll/workflows/CI/badge.svg)](https://github.com/sbip-sg/tsll/actions)
+## What is tsll?
+Tsll is a TypeScript frontend written in TypeScript for LLVM IR generation. For now, this work is mainly used for blockchain smart contract verification. Before we transpile Node.js code in Typescript into Javascript artifacts, Typescriptllvm combined with other backend analysis tools provides a powerful framework to search for vulnerabilities and security issues as smart contract developers would not realize while writing such smart contracts.
 
 #### **Design idea**
 Typescriptllvm extracts information on Abstract Syntax Tree (AST) generated with [Typescript Compiler API](https://github.com/Microsoft/TypeScript/wiki/Using-the-Compiler-API) by visiting each node, and create instructions accordingly with [LLVM Typescript bindings](https://github.com/MichaReiser/llvm-node) to achieve the final IR generation.
