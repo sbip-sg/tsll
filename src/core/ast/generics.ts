@@ -1,4 +1,4 @@
-import { Type } from "@lungchen/llvm-node";
+import llvm from "@lungchen/llvm-node";
 import { TypeUndefinedError } from "../../common/error";
 import { Scope } from "../../common/scope";
 import ts from "typescript";
@@ -7,7 +7,7 @@ import { Visitor } from "./visitor";
 /* Helper class to save generic declarations and instantiate them with specific types later */
 export class Generics {
     private declarationMap: Map<string, ts.ClassDeclaration | ts.FunctionDeclaration>;
-    private typeParameterMap: Map<string, Type>;
+    private typeParameterMap: Map<string, llvm.Type>;
     private declaredNames: Set<string>;
 
     constructor(private visitor: Visitor) {
@@ -29,7 +29,7 @@ export class Generics {
         this.declarationMap.set(name, declaration);
     }
 
-    public createSpecificDeclaration(name: string, types: Type[], scope: Scope) {
+    public createSpecificDeclaration(name: string, types: llvm.Type[], scope: Scope) {
         // Make sure that declared name does exist.
         const declaration = this.declarationMap.get(name);
         if (declaration === undefined) throw new TypeUndefinedError();
@@ -41,7 +41,7 @@ export class Generics {
         return structType;
     }
 
-    public replaceTypeParameters(typeParameterMap: Map<string, Type>) {
+    public replaceTypeParameters(typeParameterMap: Map<string, llvm.Type>) {
         this.typeParameterMap = typeParameterMap;
     }
 
@@ -51,7 +51,7 @@ export class Generics {
         return type;
     }
 
-    public static constructWholeName(name: string, types: Type[]) {
+    public static constructWholeName(name: string, types: llvm.Type[]) {
         let wholeName = name;
         types.every(type => wholeName = wholeName.concat(`_${type.toString()}`));
         return wholeName;
