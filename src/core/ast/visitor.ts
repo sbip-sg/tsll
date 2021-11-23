@@ -203,7 +203,8 @@ export class Visitor {
     }
 
     public visitFunctionDeclaration(functionDeclaration: ts.FunctionDeclaration, scope: Scope) {
-        this.visitFunctionLikeDeclaration(functionDeclaration, scope);
+        const fn = this.visitFunctionLikeDeclaration(functionDeclaration, scope);
+        scope.set(fn.name, fn);
     }
 
     public visitFunctionLikeDeclaration(functionLikeDeclaration: FunctionLikeDeclaration, scope: Scope) {
