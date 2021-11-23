@@ -94,6 +94,8 @@ export class Builder {
     }
 
     public getIntrinsic(name: string) {
+        // Make sure the name starts with the correct intrinsic prefix
+        if (!name.startsWith('llvm.')) return undefined;
         const intrinsicId = llvm.Function.lookupIntrinsicID(name);
         if (intrinsicId === 0) return undefined;
         return llvm.Intrinsic.getDeclaration(this.llvmModule, intrinsicId);
