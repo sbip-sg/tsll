@@ -1,5 +1,6 @@
 import { FunctionUndefinedError, SyntaxNotSupportedError, TypeUndefinedError, VariableUndefinedError } from "./error";
 import { Value, Function, Type } from "../core/ir/types";
+import ts from "typescript";
 
 export class Scope {
     private scopeNameArray: string[];
@@ -9,8 +10,10 @@ export class Scope {
     private defaultMap: Map<string, Map<string, Value>>;
     private structMap: Map<string, Array<string>>;
     private nextType: Type | undefined;
+    private program: ts.Program | undefined;
 
-    constructor() {
+    constructor(program?: ts.Program) {
+        this.program = program;
         this.scopeNameArray = [];
         this.functionArray = [];
         this.tableArray = [new Map()];
@@ -97,5 +100,23 @@ export class Scope {
     }
     public setNextType(type: Type) {
         this.nextType = type;
+    }
+
+    /**
+     * Access declarations from the type checker of this program
+     */
+    public getDeclaration(node: ts.Node) {
+        if (this.program !== undefined) {
+            const typeChecker = this.program.getTypeChecker();
+            let symbol = typeChecker.getSymbolAtLocation(node);
+            // Get the original symbol with the alias if the members of the alias do not exist
+            let aliasedSymbol: ts.Symbol | undefined;
+            if (symbol !== undefined && symbol.members === undefined && symbol.valueDeclaration === undefined) {
+                aliasedSymbol = typeChecker.getAliasedSymbol(symbol);
+            }
+            if (aliasedSymbol !== undefined) symbol = aliasedSymbol;
+            if (symbol !== undefined && symbol.declarations !== undefined) return symbol.declarations[0];
+        }
+        return undefined;
     }
 }

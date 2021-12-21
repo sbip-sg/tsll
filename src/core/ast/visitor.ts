@@ -468,9 +468,19 @@ export class Visitor {
         const structName = interfaceDeclaration.name.text;
         let structType = this.builder.buildStructType(structName);
 
+
+        const heritageClauses = interfaceDeclaration.heritageClauses;
+        if (heritageClauses !== undefined) {
+            for (const heritageClause of heritageClauses) {
+                for (const type of heritageClause.types) {
+                    this.visitTypeNode(type, scope);
+                }
+            }
+        }
+
         let elementTypes: Type[] = [];
         let elementNames: string[] = [];
-        for (let member of interfaceDeclaration.members) {
+        for (const member of interfaceDeclaration.members) {
             if (ts.isMethodSignature(member)) {
                 if (member.type === undefined) throw new SyntaxNotSupportedError();
 
@@ -520,29 +530,43 @@ export class Visitor {
 
     public visitImportDeclaration(importDeclaration: ts.ImportDeclaration, scope: Scope) {
         // moduleSpecifier should be a string; otherwise it is a grammatical error.
-        let moduleSpecifier = importDeclaration.moduleSpecifier;
-        // if (!isString(moduleSpecifier)) throw new SyntaxNotSupportedError();
+        const moduleSpecifier = importDeclaration.moduleSpecifier;
+        if (!ts.isStringLiteral(moduleSpecifier)) throw new SyntaxNotSupportedError();
         
-        let importClause = importDeclaration.importClause;
+        /**
+         * TODO: This name is used for naming declarations imported from the module.
+         */
+        const moduleName = moduleSpecifier.text;
+        
+        const importClause = importDeclaration.importClause;
         // Simply return since only side effects will occur without importing anything.
         if (importClause === undefined) return;
 
-        let name = importClause.name;
+        const name = importClause.name;
         if (name !== undefined) {
-            // scope.storeImportedNamespace(moduleSpecifier, name.text);
+            const declaration = scope.getDeclaration(name);
+            if (declaration !== undefined) this.visitDeclaration(declaration, scope);
         }
 
-        let namedBindings = importClause.namedBindings;
+        const namedBindings = importClause.namedBindings;
         if (namedBindings !== undefined) {
             if (ts.isNamedImports(namedBindings)) {
-                for (let element of namedBindings.elements) {
-                    // scope.storeImportedIdentifier(moduleSpecifier, element.name.text);
+                for (const element of namedBindings.elements) {
+                    const declaration = scope.getDeclaration(element.name);
+                    if (declaration !== undefined) this.visitDeclaration(declaration, scope);
                 }
             }
 
             if (ts.isNamespaceImport(namedBindings)) {
                 // scope.storeImportedNamespace(moduleSpecifier, namedBindings.name.text);
             }
+        }
+    }
+
+    public visitEnumDeclaration(enumDeclaration: ts.EnumDeclaration, scope: Scope) {
+        const name = this.visitIdentifier(enumDeclaration.name, scope);
+        for (const member of enumDeclaration.members) {
+            
         }
     }
 
@@ -570,6 +594,14 @@ export class Visitor {
             return returnValue;
         }
 
+    }
+
+    public visitDeclaration(declaration: ts.Declaration, scope: Scope) {
+        if (ts.isClassDeclaration(declaration)) this.visitClassDeclaration(declaration, scope);
+        if (ts.isFunctionDeclaration(declaration)) this.visitFunctionDeclaration(declaration, scope);
+        if (ts.isVariableDeclaration(declaration)) this.visitVariableDeclaration(declaration, scope);
+        if (ts.isInterfaceDeclaration(declaration)) this.visitInterfaceDeclaration(declaration, scope);
+        if (ts.isEnumDeclaration(declaration)) this.visitEnumDeclaration(declaration, scope);
     }
 
     public visitExpression(expression: ts.Expression, scope: Scope): string | Value {
@@ -680,23 +712,42 @@ export class Visitor {
         throw new SyntaxNotSupportedError();
     }
 
+    public visitExpressionWithTypeArguments(expressionWithTypeArguments: ts.ExpressionWithTypeArguments, scope?: Scope) {
+        const expression = expressionWithTypeArguments.expression;
+        if (scope === undefined || !ts.isIdentifier(expression)) throw new SyntaxNotSupportedError();
+        const typeArguments = expressionWithTypeArguments.typeArguments;
+        return this.resolveType(scope, expression, typeArguments);
+    }
+
     public visitTypeReference(typeReference: ts.TypeReferenceNode, scope?: Scope) {
-        const typeName = this.visitEntityName(typeReference.typeName);
+        let typeName = typeReference.typeName;
+        if (scope === undefined || !ts.isIdentifier(typeName)) throw new SyntaxNotSupportedError();
         const typeArguments = typeReference.typeArguments;
-        let type: Type;
-        if (typeArguments === undefined) {
-            type = Visitor.generics.getTypeByName(typeName);
+        return this.resolveType(scope, typeName, typeArguments);
+    }
+
+    public resolveType(scope: Scope, typeName: ts.Identifier, typeArgs?: ts.NodeArray<ts.TypeNode>) {
+        const name = this.visitIdentifier(typeName, scope);
+        let type: Type | undefined;
+        if (typeArgs === undefined) {
+            type = Visitor.generics.getTypeByName(name);
+            let declaration: ts.Declaration | undefined;
+            // If the name cannot be found, then include the missing declaration of the type.
+            if (type === undefined) declaration = scope.getDeclaration(typeName);
+            if (declaration === undefined) throw new SyntaxNotSupportedError();
+            this.visitDeclaration(declaration, scope);
+            type = this.builder.getStructType(name);
         } else {
             // TODO change typename to wholename
-            const types = typeArguments.map(typeArgument => this.visitTypeNode(typeArgument, scope)) as Type[];
+            const types = typeArgs.map(typeArg => this.visitTypeNode(typeArg, scope)) as Type[];
             if (scope === undefined) throw new SyntaxNotSupportedError();
             
             // Construct a whole name from typeName and types
-            const wholeName = Generics.constructWholeName(typeName, types);
+            const wholeName = Generics.constructWholeName(name, types);
             if (Visitor.generics.hasDeclared(wholeName)) {
                 type = this.builder.getStructType(wholeName);
             } else {
-                type = Visitor.generics.createSpecificDeclaration(typeName, types, scope);
+                type = Visitor.generics.createSpecificDeclaration(name, types, scope);
             }
         }
         if (type.isStructTy()) {
@@ -1011,6 +1062,8 @@ export class Visitor {
                 return this.builder.buildAnyType();
             case ts.SyntaxKind.TypeReference:
                 return this.visitTypeReference(typeNode as ts.TypeReferenceNode, scope);
+            case ts.SyntaxKind.ExpressionWithTypeArguments:
+                return this.visitExpressionWithTypeArguments(typeNode as ts.ExpressionWithTypeArguments, scope);
             default:
                 throw new SyntaxNotSupportedError();
         }

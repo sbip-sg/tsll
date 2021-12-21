@@ -29,7 +29,7 @@ export function convert(files: string[], emitIR: boolean, bitcodeOutput?: string
         let names = file.trim().split('/');
         let moduleId = names[names.length - 1];
         let builder = new Builder(moduleId);
-        let scope = new Scope();
+        let scope = new Scope(program);
         let visitor = Visitor.getVisitor(builder);
 
         visitor.visitSourceFile(srcFile, scope);
