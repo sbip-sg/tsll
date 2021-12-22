@@ -407,6 +407,10 @@ export class Builder {
         return this.llvmBuilder.createSIToFP(value, llvm.Type.getDoubleTy(this.llvmContext));
     }
 
+    public convertNumberToInteger(value: Value) {
+        return this.llvmBuilder.createFPToSI(value, llvm.Type.getInt32Ty(this.llvmContext));
+    }
+
     public printIR() {
         console.log(this.llvmModule.print());
     }

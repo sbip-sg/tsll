@@ -1,7 +1,7 @@
 import ts from 'typescript';
 import { SyntaxNotSupportedError, InstantiateError, VariableUndefinedError, TypeUndefinedError, TypeMismatchError } from '../../common/error';
 import { Builder } from '../ir/builder';
-import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst, isFunction, isConstantInt } from '../ir/types';
+import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst, isFunction, isConstantInt, isPointerType } from '../ir/types';
 import { Scope } from '../../common/scope';
 import { isString, FunctionLikeDeclaration, Property, isStringArray, isBreak, isContinue, Break, Continue } from '../../common/types';
 import llvm, { BasicBlock, CallInst, ConstantInt, StructType } from '@lungchen/llvm-node';
@@ -430,18 +430,20 @@ export class Visitor {
         const currentBlock = currentFunction.getEntryBlock();
         if (currentBlock === null) throw new SyntaxNotSupportedError();
         const visited = this.visitExpression(switchStatement.expression, scope);
-        const onVal = this.resolveNameDefinition(visited, scope);
-        let defaultDest = this.builder.buildBasicBlock(currentFunction);
+        const onVal = this.resolveVariableDefinition(visited, scope);
+        const defaultDest = this.builder.buildBasicBlock(currentFunction);
+        const finalDest = this.builder.buildBasicBlock(currentFunction);
         let caseDests: BasicBlock[] = [];
         let caseValues: ConstantInt[] = [];
         for (const clause of switchStatement.caseBlock.clauses) {
+            this.builder.setCurrentBlock(currentBlock);
             if (ts.isCaseClause(clause)) {
                 const caseDest = this.builder.buildBasicBlock(currentFunction);
                 const visited = this.visitExpression(clause.expression, scope);
-                const caseValue = this.resolveNameDefinition(visited, scope);
-                if (!isConstantInt(caseValue)) continue;
+                let caseValue = this.resolveVariableDefinition(visited, scope);
                 caseDests.push(caseDest);
-                caseValues.push(caseValue);
+                caseValues.push(caseValue as ConstantInt);
+                this.builder.setCurrentBlock(caseDest);
             } else if (ts.isDefaultClause(clause)) {
                 this.builder.setCurrentBlock(defaultDest);
             } else {
@@ -451,10 +453,13 @@ export class Visitor {
             for (const statement of clause.statements) {
                 this.visitStatement(statement, scope);
             }
+
+            this.builder.buildBranch(finalDest);
         }
 
-        this.builder.setCurrentBlock(currentBlock);
+        this.builder.setCurrentBlock(currentBlock);        
         this.builder.buildSwitch(onVal, defaultDest, caseValues, caseDests);
+        this.builder.setCurrentBlock(finalDest);
     }
 
     public visitCaseClause(clause: ts.CaseClause, scope: Scope) {
@@ -577,14 +582,17 @@ export class Visitor {
                 // An initializer does not contain a string
                 propertyValue = this.visitExpression(initializer, scope) as Value;
                 // Assign a new increment
-                if (ts.isNumericLiteral(initializer)) increment = parseFloat(initializer.text);
+                if (ts.isNumericLiteral(initializer)) {
+                    increment = parseInt(initializer.text);
+                    propertyValue = this.builder.buildInteger(increment, 32);
+                }
             } else {
-                propertyValue = this.builder.buildNumber(increment);
+                propertyValue = this.builder.buildInteger(increment, 32);
             }
 
             ++increment;
 
-            const alloca = this.builder.buildAlloca(this.builder.buildNumberType());
+            const alloca = this.builder.buildAlloca(this.builder.buildIntType(32));
             this.builder.buildStore(propertyValue, alloca);
             scope.set(wholeName, alloca);
         }
@@ -752,12 +760,14 @@ export class Visitor {
         let type: Type | undefined;
         if (typeArgs === undefined) {
             type = Visitor.generics.getTypeByName(name);
-            let declaration: ts.Declaration | undefined;
+            if (type === undefined) type = this.builder.buildInt32Type();
             // If the name cannot be found, then include the missing declaration of the type.
-            if (type === undefined) declaration = scope.getDeclaration(typeName);
-            if (declaration === undefined) throw new SyntaxNotSupportedError();
-            this.visitDeclaration(declaration, scope);
-            type = this.builder.getStructType(name);
+            if (type === undefined) {
+                const declaration = scope.getDeclaration(typeName);
+                if (declaration === undefined) throw new SyntaxNotSupportedError();
+                this.visitDeclaration(declaration, scope);
+                type = this.builder.getStructType(name);
+            }
         } else {
             // TODO change typename to wholename
             const types = typeArgs.map(typeArg => this.visitTypeNode(typeArg, scope)) as Type[];
@@ -1091,6 +1101,12 @@ export class Visitor {
     }
 
     public visitClassDeclaration(classDeclaration: ts.ClassDeclaration, scope: Scope, specificTypes?: Type[]) {
+        
+        const currentFunction = scope.getCurrentFunction();
+        const currentBlock = currentFunction.getEntryBlock();
+        if (!isBasicBlock(currentBlock)) throw new SyntaxNotSupportedError();
+        
+        
         if (classDeclaration.name === undefined) throw new SyntaxNotSupportedError();
         let className = classDeclaration.name.text;
 
@@ -1152,7 +1168,8 @@ export class Visitor {
 
         // If no construtors are provided, create a default constructor
         if (constructorDeclarations.length === 0) {
-            this.builder.buildConstructor(`${className}_DefaultConstructor`, [], []);
+            const thisPtr = this.builder.buildPointerType(structType);
+            this.builder.buildConstructor(`${className}_DefaultConstructor`, [thisPtr], ['this']);
             this.builder.buildReturn();
         }
 
@@ -1162,6 +1179,8 @@ export class Visitor {
         }
 
         scope.leave();
+
+        this.builder.setCurrentBlock(currentBlock);
 
         return structType;
     }
@@ -1590,6 +1609,8 @@ export class Visitor {
             if (isAllocaInst(value)) return this.builder.buildLoad(value);
             if (isGlobalVariable(value) && value.initializer !== undefined) return value.initializer;
             return value;
+        } else if (isValue(visited) && isPointerType(visited.type)) {
+            return this.builder.buildLoad(visited);
         } else if (isValue(visited)) {
             return visited;
         } else {
