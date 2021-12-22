@@ -352,6 +352,7 @@ export class Visitor {
         if (ts.isSwitchStatement(statement)) this.visitSwitchStatement(statement, scope);
         if (ts.isTryStatement(statement)) this.visitTryStatement(statement, scope);
         if (ts.isThrowStatement(statement)) this.visitThrowStatement(statement, scope);
+        if (ts.isEnumDeclaration(statement)) this.visitEnumDeclaration(statement, scope);
     }
 
     public visitTryStatement(tryStatement: ts.TryStatement, scope: Scope) {
@@ -564,10 +565,30 @@ export class Visitor {
     }
 
     public visitEnumDeclaration(enumDeclaration: ts.EnumDeclaration, scope: Scope) {
-        const name = this.visitIdentifier(enumDeclaration.name, scope);
+        const enumName = this.visitIdentifier(enumDeclaration.name, scope);
+
+        let increment = 0;
         for (const member of enumDeclaration.members) {
-            
+            const propertyName = this.visitPropertyName(member.name);
+            const wholeName = `${enumName}_${propertyName}`;
+            const initializer = member.initializer;
+            let propertyValue: Value;
+            if (initializer !== undefined) {
+                // An initializer does not contain a string
+                propertyValue = this.visitExpression(initializer, scope) as Value;
+                // Assign a new increment
+                if (ts.isNumericLiteral(initializer)) increment = parseFloat(initializer.text);
+            } else {
+                propertyValue = this.builder.buildNumber(increment);
+            }
+
+            ++increment;
+
+            const alloca = this.builder.buildAlloca(this.builder.buildNumberType());
+            this.builder.buildStore(propertyValue, alloca);
+            scope.set(wholeName, alloca);
         }
+
     }
 
     public visitBreakStatement(breakOrContinueStatement: ts.BreakOrContinueStatement, scope: Scope) {
