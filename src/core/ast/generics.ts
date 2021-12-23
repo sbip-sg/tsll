@@ -46,9 +46,7 @@ export class Generics {
     }
 
     public getTypeByName(name: string) {
-        const type = this.typeParameterMap.get(name);
-        if (type === undefined) throw new TypeUndefinedError();
-        return type;
+        return this.typeParameterMap.get(name);
     }
 
     public static constructWholeName(name: string, types: llvm.Type[]) {

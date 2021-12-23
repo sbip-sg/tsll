@@ -1,7 +1,7 @@
 import ts from 'typescript';
 import { SyntaxNotSupportedError, InstantiateError, VariableUndefinedError, TypeUndefinedError, TypeMismatchError } from '../../common/error';
 import { Builder } from '../ir/builder';
-import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst, isFunction, isConstantInt } from '../ir/types';
+import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst, isFunction, isConstantInt, isPointerType } from '../ir/types';
 import { Scope } from '../../common/scope';
 import { isString, FunctionLikeDeclaration, Property, isStringArray, isBreak, isContinue, Break, Continue } from '../../common/types';
 import llvm, { BasicBlock, CallInst, ConstantInt, StructType } from '@lungchen/llvm-node';
@@ -309,14 +309,22 @@ export class Visitor {
             values.push(value);
         }
 
+
+        let defaultValues: Map<string, Value> | undefined;
         try {
             let thisValue = scope.get('this');
+            const baseClassName = scope.getBaseClassName();
+            if (baseClassName !== undefined) {
+                const baseStructType = this.builder.getStructType(baseClassName);
+                const baseStructPtrType = this.builder.buildPointerType(baseStructType);
+                thisValue = this.builder.buildBitcast(thisValue, baseStructPtrType);
+                scope.resetBaseClassName();
+            }
             values.unshift(thisValue);
+            defaultValues = scope.getDefaultValues(name);
         } catch (err) {
             // err msg here is not important
         }
-
-        let defaultValues = scope.getDefaultValues(name);
 
         return this.builder.buildFunctionCall(name, values, defaultValues);
     }
@@ -353,6 +361,7 @@ export class Visitor {
         if (ts.isSwitchStatement(statement)) this.visitSwitchStatement(statement, scope);
         if (ts.isTryStatement(statement)) this.visitTryStatement(statement, scope);
         if (ts.isThrowStatement(statement)) this.visitThrowStatement(statement, scope);
+        if (ts.isEnumDeclaration(statement)) this.visitEnumDeclaration(statement, scope);
     }
 
     public visitTryStatement(tryStatement: ts.TryStatement, scope: Scope) {
@@ -430,18 +439,20 @@ export class Visitor {
         const currentBlock = currentFunction.getEntryBlock();
         if (currentBlock === null) throw new SyntaxNotSupportedError();
         const visited = this.visitExpression(switchStatement.expression, scope);
-        const onVal = this.resolveNameDefinition(visited, scope);
-        let defaultDest = this.builder.buildBasicBlock(currentFunction);
+        const onVal = this.resolveVariableDefinition(visited, scope);
+        const defaultDest = this.builder.buildBasicBlock(currentFunction);
+        const finalDest = this.builder.buildBasicBlock(currentFunction);
         let caseDests: BasicBlock[] = [];
         let caseValues: ConstantInt[] = [];
         for (const clause of switchStatement.caseBlock.clauses) {
+            this.builder.setCurrentBlock(currentBlock);
             if (ts.isCaseClause(clause)) {
                 const caseDest = this.builder.buildBasicBlock(currentFunction);
                 const visited = this.visitExpression(clause.expression, scope);
-                const caseValue = this.resolveNameDefinition(visited, scope);
-                if (!isConstantInt(caseValue)) continue;
+                let caseValue = this.resolveVariableDefinition(visited, scope);
                 caseDests.push(caseDest);
-                caseValues.push(caseValue);
+                caseValues.push(caseValue as ConstantInt);
+                this.builder.setCurrentBlock(caseDest);
             } else if (ts.isDefaultClause(clause)) {
                 this.builder.setCurrentBlock(defaultDest);
             } else {
@@ -451,10 +462,13 @@ export class Visitor {
             for (const statement of clause.statements) {
                 this.visitStatement(statement, scope);
             }
+
+            this.builder.buildBranch(finalDest);
         }
 
-        this.builder.setCurrentBlock(currentBlock);
+        this.builder.setCurrentBlock(currentBlock);        
         this.builder.buildSwitch(onVal, defaultDest, caseValues, caseDests);
+        this.builder.setCurrentBlock(finalDest);
     }
 
     public visitCaseClause(clause: ts.CaseClause, scope: Scope) {
@@ -469,9 +483,19 @@ export class Visitor {
         const structName = interfaceDeclaration.name.text;
         let structType = this.builder.buildStructType(structName);
 
+
+        const heritageClauses = interfaceDeclaration.heritageClauses;
+        if (heritageClauses !== undefined) {
+            for (const heritageClause of heritageClauses) {
+                for (const type of heritageClause.types) {
+                    this.visitTypeNode(type, scope);
+                }
+            }
+        }
+
         let elementTypes: Type[] = [];
         let elementNames: string[] = [];
-        for (let member of interfaceDeclaration.members) {
+        for (const member of interfaceDeclaration.members) {
             if (ts.isMethodSignature(member)) {
                 if (member.type === undefined) throw new SyntaxNotSupportedError();
 
@@ -521,23 +545,30 @@ export class Visitor {
 
     public visitImportDeclaration(importDeclaration: ts.ImportDeclaration, scope: Scope) {
         // moduleSpecifier should be a string; otherwise it is a grammatical error.
-        let moduleSpecifier = importDeclaration.moduleSpecifier;
-        // if (!isString(moduleSpecifier)) throw new SyntaxNotSupportedError();
+        const moduleSpecifier = importDeclaration.moduleSpecifier;
+        if (!ts.isStringLiteral(moduleSpecifier)) throw new SyntaxNotSupportedError();
         
-        let importClause = importDeclaration.importClause;
+        /**
+         * TODO: This name is used for naming declarations imported from the module.
+         */
+        const moduleName = moduleSpecifier.text;
+        
+        const importClause = importDeclaration.importClause;
         // Simply return since only side effects will occur without importing anything.
         if (importClause === undefined) return;
 
-        let name = importClause.name;
+        const name = importClause.name;
         if (name !== undefined) {
-            // scope.storeImportedNamespace(moduleSpecifier, name.text);
+            const declaration = scope.getDeclaration(name);
+            if (declaration !== undefined) this.visitDeclaration(declaration, scope);
         }
 
-        let namedBindings = importClause.namedBindings;
+        const namedBindings = importClause.namedBindings;
         if (namedBindings !== undefined) {
             if (ts.isNamedImports(namedBindings)) {
-                for (let element of namedBindings.elements) {
-                    // scope.storeImportedIdentifier(moduleSpecifier, element.name.text);
+                for (const element of namedBindings.elements) {
+                    const declaration = scope.getDeclaration(element.name);
+                    if (declaration !== undefined) this.visitDeclaration(declaration, scope);
                 }
             }
 
@@ -545,6 +576,36 @@ export class Visitor {
                 // scope.storeImportedNamespace(moduleSpecifier, namedBindings.name.text);
             }
         }
+    }
+
+    public visitEnumDeclaration(enumDeclaration: ts.EnumDeclaration, scope: Scope) {
+        const enumName = this.visitIdentifier(enumDeclaration.name, scope);
+
+        let increment = 0;
+        for (const member of enumDeclaration.members) {
+            const propertyName = this.visitPropertyName(member.name);
+            const wholeName = `${enumName}_${propertyName}`;
+            const initializer = member.initializer;
+            let propertyValue: Value;
+            if (initializer !== undefined) {
+                // An initializer does not contain a string
+                propertyValue = this.visitExpression(initializer, scope) as Value;
+                // Assign a new increment
+                if (ts.isNumericLiteral(initializer)) {
+                    increment = parseInt(initializer.text);
+                    propertyValue = this.builder.buildInteger(increment, 32);
+                }
+            } else {
+                propertyValue = this.builder.buildInteger(increment, 32);
+            }
+
+            ++increment;
+
+            const alloca = this.builder.buildAlloca(this.builder.buildIntType(32));
+            this.builder.buildStore(propertyValue, alloca);
+            scope.set(wholeName, alloca);
+        }
+
     }
 
     public visitBreakStatement(breakOrContinueStatement: ts.BreakOrContinueStatement, scope: Scope) {
@@ -571,6 +632,14 @@ export class Visitor {
             return returnValue;
         }
 
+    }
+
+    public visitDeclaration(declaration: ts.Declaration, scope: Scope) {
+        if (ts.isClassDeclaration(declaration)) this.visitClassDeclaration(declaration, scope);
+        if (ts.isFunctionDeclaration(declaration)) this.visitFunctionDeclaration(declaration, scope);
+        if (ts.isVariableDeclaration(declaration)) this.visitVariableDeclaration(declaration, scope);
+        if (ts.isInterfaceDeclaration(declaration)) this.visitInterfaceDeclaration(declaration, scope);
+        if (ts.isEnumDeclaration(declaration)) this.visitEnumDeclaration(declaration, scope);
     }
 
     public visitExpression(expression: ts.Expression, scope: Scope): string | Value {
@@ -642,6 +711,9 @@ export class Visitor {
                 return this.builder.buildBoolean(false);
             case ts.SyntaxKind.ThisKeyword:
                 return 'this';
+            case ts.SyntaxKind.SuperKeyword:
+                // Return the constructor's name with the name of the base class
+                return `${scope.getBaseClassName()}_Constructor`;
             default:
                 throw new SyntaxNotSupportedError();
         }
@@ -681,23 +753,48 @@ export class Visitor {
         throw new SyntaxNotSupportedError();
     }
 
+    public visitExpressionWithTypeArguments(expressionWithTypeArguments: ts.ExpressionWithTypeArguments, scope?: Scope) {
+        const expression = expressionWithTypeArguments.expression;
+        if (scope === undefined || !ts.isIdentifier(expression)) throw new SyntaxNotSupportedError();
+        const typeArguments = expressionWithTypeArguments.typeArguments;
+        try {
+            return this.builder.getStructType(expression.text);
+        } catch (err) {
+            return  this.resolveType(scope, expression, typeArguments);
+        }
+    }
+
     public visitTypeReference(typeReference: ts.TypeReferenceNode, scope?: Scope) {
-        const typeName = this.visitEntityName(typeReference.typeName);
+        let typeName = typeReference.typeName;
+        if (scope === undefined || !ts.isIdentifier(typeName)) throw new SyntaxNotSupportedError();
         const typeArguments = typeReference.typeArguments;
-        let type: Type;
-        if (typeArguments === undefined) {
-            type = Visitor.generics.getTypeByName(typeName);
+        return this.resolveType(scope, typeName, typeArguments);
+    }
+
+    public resolveType(scope: Scope, typeName: ts.Identifier, typeArgs?: ts.NodeArray<ts.TypeNode>) {
+        const name = this.visitIdentifier(typeName, scope);
+        let type: Type | undefined;
+        if (typeArgs === undefined) {
+            type = Visitor.generics.getTypeByName(name);
+            if (type === undefined) type = this.builder.buildInt32Type();
+            // If the name cannot be found, then include the missing declaration of the type.
+            if (type === undefined) {
+                const declaration = scope.getDeclaration(typeName);
+                if (declaration === undefined) throw new SyntaxNotSupportedError();
+                this.visitDeclaration(declaration, scope);
+                type = this.builder.getStructType(name);
+            }
         } else {
             // TODO change typename to wholename
-            const types = typeArguments.map(typeArgument => this.visitTypeNode(typeArgument, scope)) as Type[];
+            const types = typeArgs.map(typeArg => this.visitTypeNode(typeArg, scope)) as Type[];
             if (scope === undefined) throw new SyntaxNotSupportedError();
             
             // Construct a whole name from typeName and types
-            const wholeName = Generics.constructWholeName(typeName, types);
+            const wholeName = Generics.constructWholeName(name, types);
             if (Visitor.generics.hasDeclared(wholeName)) {
                 type = this.builder.getStructType(wholeName);
             } else {
-                type = Visitor.generics.createSpecificDeclaration(typeName, types, scope);
+                type = Visitor.generics.createSpecificDeclaration(name, types, scope);
             }
         }
         if (type.isStructTy()) {
@@ -726,7 +823,7 @@ export class Visitor {
 
             // TODO: Match the parameters of a constructor with the arguments given for class instantiation
             if (newExpression.arguments === undefined || newExpression.arguments.length === 0) {
-                this.builder.buildFunctionCall(`${structType.name}_DefaultConstructor`, [allocaValue]);
+                this.builder.buildFunctionCall(`${structType.name}_Constructor`, [allocaValue]);
             } else {
                 const defaultValues = scope.getDefaultValues(`${structType.name}_Constructor`);
                 // First argument of any member function calls is always a pointer to a struct type
@@ -1012,12 +1109,20 @@ export class Visitor {
                 return this.builder.buildAnyType();
             case ts.SyntaxKind.TypeReference:
                 return this.visitTypeReference(typeNode as ts.TypeReferenceNode, scope);
+            case ts.SyntaxKind.ExpressionWithTypeArguments:
+                return this.visitExpressionWithTypeArguments(typeNode as ts.ExpressionWithTypeArguments, scope);
             default:
                 throw new SyntaxNotSupportedError();
         }
     }
 
     public visitClassDeclaration(classDeclaration: ts.ClassDeclaration, scope: Scope, specificTypes?: Type[]) {
+        
+        const currentFunction = scope.getCurrentFunction();
+        const currentBlock = currentFunction.getEntryBlock();
+        if (!isBasicBlock(currentBlock)) throw new SyntaxNotSupportedError();
+        
+        
         if (classDeclaration.name === undefined) throw new SyntaxNotSupportedError();
         let className = classDeclaration.name.text;
 
@@ -1031,6 +1136,25 @@ export class Visitor {
         if (specificTypes !== undefined) {
             // Construct a whole name from typeName and types
             className = Generics.constructWholeName(className, specificTypes);
+        }
+
+        const inheritedTypes: llvm.Type[] = [];
+        const inheritedNames: string[] = [];
+        const heritageClauses = classDeclaration.heritageClauses;
+        if (heritageClauses !== undefined) {
+            for (const heritageClause of heritageClauses) {
+                for (const type of heritageClause.types) {
+                    if (heritageClause.token === ts.SyntaxKind.ExtendsKeyword) {
+                        const inheritedType = this.visitTypeNode(type, scope);
+                        if (inheritedType.isStructTy()) {
+                            scope.resetBaseClassName(inheritedType.name);
+                            const inheritedPtrType = this.builder.buildPointerType(inheritedType)
+                            inheritedTypes.push(inheritedPtrType);
+                            if (inheritedType.name !== undefined) inheritedNames.push(inheritedType.name);
+                        }
+                    }
+                }
+            }
         }
 
         scope.enter(className);
@@ -1068,18 +1192,23 @@ export class Visitor {
             propertyNames.push(property.propertyName);
         }
 
+        // Combine element types from inheritance and that of property
+        propertyTypes = [...inheritedTypes, ...propertyTypes];
+        propertyNames = [...inheritedNames, ...propertyNames];
+
         // Build a struct type with the class name
         const structType = this.builder.buildStructType(className);
         // Insert property types into the struct type created above
         this.builder.insertProperty(className, propertyTypes, propertyNames);
 
-        for (let constructorDeclaration of constructorDeclarations) {
+        for (const constructorDeclaration of constructorDeclarations) {
             this.visitConstructorDeclaration(constructorDeclaration, scope);
         }
 
         // If no construtors are provided, create a default constructor
         if (constructorDeclarations.length === 0) {
-            this.builder.buildConstructor(`${className}_DefaultConstructor`, [], []);
+            const thisPtr = this.builder.buildPointerType(structType);
+            this.builder.buildConstructor(`${className}_Constructor`, [thisPtr], ['this']);
             this.builder.buildReturn();
         }
 
@@ -1089,6 +1218,8 @@ export class Visitor {
         }
 
         scope.leave();
+
+        this.builder.setCurrentBlock(currentBlock);
 
         return structType;
     }
@@ -1517,6 +1648,8 @@ export class Visitor {
             if (isAllocaInst(value)) return this.builder.buildLoad(value);
             if (isGlobalVariable(value) && value.initializer !== undefined) return value.initializer;
             return value;
+        } else if (isValue(visited) && isPointerType(visited.type)) {
+            return this.builder.buildLoad(visited);
         } else if (isValue(visited)) {
             return visited;
         } else {
