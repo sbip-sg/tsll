@@ -11,6 +11,7 @@ export class Scope {
     private structMap: Map<string, Array<string>>;
     private nextType: Type | undefined;
     private program: ts.Program | undefined;
+    private baseClassName: string | undefined;
 
     constructor(program?: ts.Program) {
         this.program = program;
@@ -118,5 +119,32 @@ export class Scope {
             if (symbol !== undefined && symbol.declarations !== undefined) return symbol.declarations[0];
         }
         return undefined;
+    }
+
+    /**
+     * Access return type of a method or function
+     */
+    public getReturnType(declaration: ts.SignatureDeclaration) {
+        if (this.program !== undefined) {
+            const typeChecker = this.program.getTypeChecker();
+            const signature = typeChecker.getSignatureFromDeclaration(declaration);
+            if (signature !== undefined) return typeChecker.getReturnTypeOfSignature(signature);
+        }
+        return undefined;
+    }
+
+    /**
+     * Define the name of a base class
+     * @param name 
+     */
+    public resetBaseClassName(name?: string) {
+        this.baseClassName = name;
+    }
+
+    /**
+     * Return the name of a base class if it was defined; otherwise, it returns undefined
+     */
+    public getBaseClassName() {
+        return this.baseClassName;
     }
 }

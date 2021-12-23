@@ -308,14 +308,22 @@ export class Visitor {
             values.push(value);
         }
 
+
+        let defaultValues: Map<string, Value> | undefined;
         try {
             let thisValue = scope.get('this');
+            const baseClassName = scope.getBaseClassName();
+            if (baseClassName !== undefined) {
+                const baseStructType = this.builder.getStructType(baseClassName);
+                const baseStructPtrType = this.builder.buildPointerType(baseStructType);
+                thisValue = this.builder.buildBitcast(thisValue, baseStructPtrType);
+                scope.resetBaseClassName();
+            }
             values.unshift(thisValue);
+            defaultValues = scope.getDefaultValues(name);
         } catch (err) {
             // err msg here is not important
         }
-
-        let defaultValues = scope.getDefaultValues(name);
 
         return this.builder.buildFunctionCall(name, values, defaultValues);
     }
@@ -702,6 +710,9 @@ export class Visitor {
                 return this.builder.buildBoolean(false);
             case ts.SyntaxKind.ThisKeyword:
                 return 'this';
+            case ts.SyntaxKind.SuperKeyword:
+                // Return the constructor's name with the name of the base class
+                return `${scope.getBaseClassName()}_Constructor`;
             default:
                 throw new SyntaxNotSupportedError();
         }
@@ -745,7 +756,11 @@ export class Visitor {
         const expression = expressionWithTypeArguments.expression;
         if (scope === undefined || !ts.isIdentifier(expression)) throw new SyntaxNotSupportedError();
         const typeArguments = expressionWithTypeArguments.typeArguments;
-        return this.resolveType(scope, expression, typeArguments);
+        try {
+            return this.builder.getStructType(expression.text);
+        } catch (err) {
+            return  this.resolveType(scope, expression, typeArguments);
+        }
     }
 
     public visitTypeReference(typeReference: ts.TypeReferenceNode, scope?: Scope) {
@@ -807,7 +822,7 @@ export class Visitor {
 
             // TODO: Match the parameters of a constructor with the arguments given for class instantiation
             if (newExpression.arguments === undefined || newExpression.arguments.length === 0) {
-                this.builder.buildFunctionCall(`${structType.name}_DefaultConstructor`, [allocaValue]);
+                this.builder.buildFunctionCall(`${structType.name}_Constructor`, [allocaValue]);
             } else {
                 const defaultValues = scope.getDefaultValues(`${structType.name}_Constructor`);
                 // First argument of any member function calls is always a pointer to a struct type
@@ -1122,6 +1137,25 @@ export class Visitor {
             className = Generics.constructWholeName(className, specificTypes);
         }
 
+        const inheritedTypes: llvm.Type[] = [];
+        const inheritedNames: string[] = [];
+        const heritageClauses = classDeclaration.heritageClauses;
+        if (heritageClauses !== undefined) {
+            for (const heritageClause of heritageClauses) {
+                for (const type of heritageClause.types) {
+                    if (heritageClause.token === ts.SyntaxKind.ExtendsKeyword) {
+                        const inheritedType = this.visitTypeNode(type, scope);
+                        if (inheritedType.isStructTy()) {
+                            scope.resetBaseClassName(inheritedType.name);
+                            const inheritedPtrType = this.builder.buildPointerType(inheritedType)
+                            inheritedTypes.push(inheritedPtrType);
+                            if (inheritedType.name !== undefined) inheritedNames.push(inheritedType.name);
+                        }
+                    }
+                }
+            }
+        }
+
         scope.enter(className);
 
         // Dispatch a variety of properties of the class
@@ -1157,19 +1191,23 @@ export class Visitor {
             propertyNames.push(property.propertyName);
         }
 
+        // Combine element types from inheritance and that of property
+        propertyTypes = [...inheritedTypes, ...propertyTypes];
+        propertyNames = [...inheritedNames, ...propertyNames];
+
         // Build a struct type with the class name
         const structType = this.builder.buildStructType(className);
         // Insert property types into the struct type created above
         this.builder.insertProperty(className, propertyTypes, propertyNames);
 
-        for (let constructorDeclaration of constructorDeclarations) {
+        for (const constructorDeclaration of constructorDeclarations) {
             this.visitConstructorDeclaration(constructorDeclaration, scope);
         }
 
         // If no construtors are provided, create a default constructor
         if (constructorDeclarations.length === 0) {
             const thisPtr = this.builder.buildPointerType(structType);
-            this.builder.buildConstructor(`${className}_DefaultConstructor`, [thisPtr], ['this']);
+            this.builder.buildConstructor(`${className}_Constructor`, [thisPtr], ['this']);
             this.builder.buildReturn();
         }
 
