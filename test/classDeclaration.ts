@@ -1,8 +1,16 @@
-class TestClass {
+class SeenClass {
+    private seeWhat: number;
+    public seeSomthing(what: number): void {
+        this.seeWhat = what;
+    }
+}
+
+class TestClass extends SeenClass {
     private testPulbicMember: string;
     private testPrivateMember: number;
 
     constructor(intro: string) {
+        super();
         this.testPulbicMember = intro;
     }
 
