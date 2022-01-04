@@ -112,7 +112,7 @@ export class Scope {
             let symbol = typeChecker.getSymbolAtLocation(node);
             // Get the original symbol with the alias if the members of the alias do not exist
             let aliasedSymbol: ts.Symbol | undefined;
-            if (symbol !== undefined && symbol.members === undefined && symbol.valueDeclaration === undefined) {
+            if (symbol !== undefined && symbol.flags === ts.SymbolFlags.Alias) {
                 aliasedSymbol = typeChecker.getAliasedSymbol(symbol);
             }
             if (aliasedSymbol !== undefined) symbol = aliasedSymbol;
