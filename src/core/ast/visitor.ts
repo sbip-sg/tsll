@@ -82,7 +82,7 @@ export class Visitor {
             scope.set(name, newAlloca);
             const currentBlock = this.builder.getCurrentBlock();
             const diLocalScope = this.debugger.getCurrentDIScope();
-            this.debugger.buildVariableDbgInfo(variableDeclaration, newAlloca, diLocalScope, currentBlock);
+            // this.debugger.buildVariableDbgInfo(variableDeclaration, newAlloca, diLocalScope, currentBlock);
             return newAlloca;
         }
 
