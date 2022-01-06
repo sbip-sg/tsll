@@ -7,6 +7,7 @@ import { isString, FunctionLikeDeclaration, Property, isStringArray, isBreak, is
 import llvm, { BasicBlock, CallInst, ConstantInt, DILocalScope, StructType } from '@lungchen/llvm-node';
 import { Generics } from './generics';
 import { Debugger } from '../ir/debugger';
+import { type } from 'os';
 
 export class Visitor {
     private builder: Builder;
@@ -536,7 +537,7 @@ export class Visitor {
             }
         }
 
-        structType.setBody(elementTypes);
+        this.builder.insertProperty(structName, elementTypes, elementNames);
     }
 
 
@@ -675,9 +676,21 @@ export class Visitor {
     }
 
     public visitTypeAliasDeclaration(typeAliasDeclaration: ts.TypeAliasDeclaration, scope: Scope) {
-        const name = this.visitIdentifier(typeAliasDeclaration.name);        
-        const type = this.visitTypeNode(typeAliasDeclaration.type, scope);
-        // Build a relationiship between the name and the type 
+        const name = this.visitIdentifier(typeAliasDeclaration.name);
+        // Create a struct in advance and populate with element types and names later
+        const typeNode = typeAliasDeclaration.type;
+        let type: llvm.Type;
+        if (ts.isIndexedAccessTypeNode(typeNode)) {
+            this.builder.buildStructType(name);
+            this.visitTypeNode(typeNode, scope);
+            type = this.builder.getStructType(name);
+        } else {
+            type = this.visitTypeNode(typeNode, scope)
+            // Build a relationiship between the name and the type
+            this.builder.setType(name, type);
+        }
+
+        return type;
     }
 
     public visitAwaitExpression(awaitExpression: ts.AwaitExpression, scope: Scope) {
@@ -793,10 +806,11 @@ export class Visitor {
         const name = this.visitIdentifier(typeName, scope);
         let type: Type | undefined;
         if (typeArgs === undefined) {
-            type = Visitor.generics.getTypeByName(name);
-            // if (type === undefined) type = this.builder.buildInt32Type();
-            // If the name cannot be found, then include the missing declaration of the type.
-            if (type === undefined) {
+            try {
+                type = this.builder.getStructType(name);
+            } catch (err) {
+                // if (type === undefined) type = this.builder.buildInt32Type();
+                // If the name cannot be found, then include the missing declaration of the type.
                 const declaration = scope.getDeclaration(typeName);
                 if (declaration === undefined) throw new SyntaxNotSupportedError();
                 this.visitDeclaration(declaration, scope);
@@ -1120,12 +1134,66 @@ export class Visitor {
     }
 
     public visitIndexedAccessType(indexedAccessType: ts.IndexedAccessTypeNode, scope?: Scope) {
-        const objectType = this.visitTypeNode(indexedAccessType.objectType, scope);
-        // if (objectType.)
-        const indexType = this.visitTypeNode(indexedAccessType.indexType, scope);
-        // Find the types according to the keys from the index type
-        // Then build a union type with the types
-        return this.builder.buildStructType('noname') as Type;
+        let objectType = this.visitTypeNode(indexedAccessType.objectType, scope);
+        if (!objectType.isPointerTy()) throw new SyntaxNotSupportedError();
+        objectType = objectType.elementType;
+        
+        if (!objectType.isStructTy() || objectType.name === undefined) throw new SyntaxNotSupportedError();
+
+        const indexType = this.visitIndexType(indexedAccessType.indexType, scope);
+        let typeNames: string[];
+        if (isString(indexType)) {
+            typeNames = [indexType];
+        } else if (indexType.isPointerTy() && indexType.elementType.isStructTy() && indexType.elementType.name !== undefined) {
+            typeNames = this.builder.getElementNamesInStruct(indexType.elementType.name);
+        } else {
+            throw new SyntaxNotSupportedError();
+        }
+
+        // Collect the types from objectType based on the keys from indexType
+        const types: llvm.Type[] = []
+        for (const typeName of typeNames) {
+            const idx = this.builder.findIndexInStruct(objectType.name, typeName);
+            const type = objectType.getElementType(idx);
+            types.push(type);
+        }
+
+        // Return a type according to the number of types found in objectType
+        if (isString(indexType)) {
+            return types[0];
+        } else {
+            // Find the largest size of element type
+            let numBits = 0;
+            let largestType: llvm.Type = types[0];
+            for (const type of types) {
+                const newNumBits = type.getPrimitiveSizeInBits();
+                if (newNumBits > numBits) {
+                    numBits = newNumBits;
+                    largestType = type;
+                }
+            }
+            const structType = this.builder.getLastStructType();
+            structType.setBody([largestType]);
+            return structType;
+        }
+    }
+
+
+    public visitIndexType(typeNode: ts.TypeNode, scope?: Scope) {
+        switch (typeNode.kind) {
+            case ts.SyntaxKind.TypeOperator:
+                return this.visitTypeOperator(typeNode as ts.TypeOperatorNode, scope);
+            case ts.SyntaxKind.LiteralType:
+                return this.visitLiteralType(typeNode as ts.LiteralTypeNode);
+            default:
+                throw new SyntaxNotSupportedError();
+        }
+    }
+
+    public visitLiteralType(literalType: ts.LiteralTypeNode) {
+        const literal = literalType.literal;
+        if (ts.isStringLiteral(literal) || ts.isNumericLiteral(literal)) return literal.text;
+        throw new SyntaxNotSupportedError();
     }
 
     public visitTypeLiteral(typeLiteral: ts.TypeLiteralNode, scope?: Scope) {
@@ -1196,9 +1264,13 @@ export class Visitor {
             case ts.SyntaxKind.ArrayType:
                 return this.visitArrayType(typeNode as ts.ArrayTypeNode);
             case ts.SyntaxKind.IndexedAccessType:
-                return this.visitIndexedAccessType(typeNode as ts.IndexedAccessTypeNode);
+                return this.visitIndexedAccessType(typeNode as ts.IndexedAccessTypeNode, scope);
             case ts.SyntaxKind.TypeOperator:
-                return this.visitTypeOperator(typeNode as ts.TypeOperatorNode);
+                return this.visitTypeOperator(typeNode as ts.TypeOperatorNode, scope);
+            case ts.SyntaxKind.ThisType:
+                return this.builder.getLastStructType();
+            case ts.SyntaxKind.UnknownKeyword:
+                return this.builder.buildPointerType(this.builder.buildVoidType());
             default:
                 throw new SyntaxNotSupportedError();
         }
