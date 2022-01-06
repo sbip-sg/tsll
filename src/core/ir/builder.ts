@@ -12,13 +12,19 @@ export class Builder {
     private loopNextBlock: llvm.BasicBlock | undefined;
     private lastStructType: llvm.StructType | undefined;
     private structMap: Map<string, Array<string>>;
+    private typeAliasMap: Map<string, llvm.Type>;
 
     constructor(moduleId: string) {
         this.llvmContext = new llvm.LLVMContext();
         this.llvmModule = new llvm.Module(moduleId, this.llvmContext);
         this.llvmBuilder = new llvm.IRBuilder(this.llvmContext);
         this.structMap = new Map();
+        this.typeAliasMap = new Map();
         // includeBuiltinTypes(this.llvmModule);
+    }
+
+    public getModule() {
+        return this.llvmModule;
     }
 
     public buildGlobalVariable(val: Value, name?: string) {
@@ -121,6 +127,11 @@ export class Builder {
         }
 
         return this.llvmBuilder.createCall(fn.type.elementType, fn, parameters);
+    }
+
+    public buildFunctionType(returnType: Type, argTypes: Type[]) {
+        const fnType = llvm.FunctionType.get(returnType, argTypes, false);
+        return fnType;
     }
 
     public buildFunction(name: string, returnType: Type, argTypes: Type[], argNames: string[]) {
@@ -276,6 +287,7 @@ export class Builder {
         let structType = this.llvmModule.getTypeByName(name);
         if (structType === null) throw new TypeUndefinedError();
         structType.setBody(types);
+        this.lastStructType = structType;
     }
 
     public insertProperty(name: string, types: Type[], names: string[]) {
@@ -283,6 +295,7 @@ export class Builder {
         if (structType === null) throw new TypeUndefinedError();
         structType.setBody(types);
         this.structMap.set(name, names);
+        this.lastStructType = structType;
     }
 
     public getStructType(name: string, types?: Type[]) {
@@ -294,6 +307,31 @@ export class Builder {
     public getLastStructType() {
         if (this.lastStructType === undefined) throw new TypeUndefinedError();
         return this.lastStructType;
+    }
+
+    public setType(name: string, type: llvm.Type) {
+        this.typeAliasMap.set(name, type);
+    }
+
+    /**
+     * Retrieve a Type among all the types declared/defined including StructType
+     * @param name 
+     * @returns 
+     */
+    public getType(name: string) {
+        try {
+            return this.getStructType(name);
+        } catch (err) {
+            const type = this.typeAliasMap.get(name);
+            if (type === undefined) throw new TypeUndefinedError();
+            return type;
+        }
+    }
+
+    public getElementNamesInStruct(structName: string) {
+        const names = this.structMap.get(structName);
+        if (names === undefined) throw new TypeUndefinedError();
+        return names;
     }
 
     public findIndexInStruct(structName: string, elementName: string) {
