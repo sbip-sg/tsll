@@ -114,6 +114,25 @@ export class Visitor {
         throw new SyntaxNotSupportedError();
     }
 
+    public visitUnionType(unionTypeNode: ts.UnionTypeNode, scope?: Scope) {
+
+        let largestType = this.builder.buildVoidType();
+        let largestSize: number = 0;
+        for (const typeNode of unionTypeNode.types) {
+            const newLargestType = this.visitTypeNode(typeNode, scope);
+            const newLargestSize = newLargestType.getPrimitiveSizeInBits();
+            if (newLargestSize > largestSize) {
+                largestSize = newLargestSize;
+                largestType = newLargestType; 
+            }
+        }
+
+        const structType = this.builder.buildStructType('union.func');
+
+        structType.setBody([largestType]);
+        return structType;
+    }
+
     public visitArrayType(arrayTypeNode: ts.ArrayTypeNode) {
         const type = this.visitTypeNode(arrayTypeNode.elementType) as Type;
         return type;
@@ -491,10 +510,20 @@ export class Visitor {
         throw new SyntaxNotSupportedError();
     }
 
-    public visitInterfaceDeclaration(interfaceDeclaration: ts.InterfaceDeclaration, scope: Scope) {
-        const structName = interfaceDeclaration.name.text;
-        let structType = this.builder.buildStructType(structName);
+    public visitInterfaceDeclaration(interfaceDeclaration: ts.InterfaceDeclaration, scope: Scope, specificTypes?: Type[]) {
+        let interfaceName = interfaceDeclaration.name.text;
+        const structType = this.builder.buildStructType(interfaceName);
 
+        if (interfaceDeclaration.typeParameters !== undefined && specificTypes === undefined) {
+            Visitor.generics.saveDeclaration(interfaceName, interfaceDeclaration);
+            return;
+        }
+
+        // Change the interface name to be more specific
+        if (specificTypes !== undefined) {
+            // Construct a whole name from the interface name and the names of specific types
+            interfaceName = Generics.constructWholeName(interfaceName, specificTypes);
+        }
 
         const heritageClauses = interfaceDeclaration.heritageClauses;
         if (heritageClauses !== undefined) {
@@ -511,7 +540,13 @@ export class Visitor {
             if (ts.isMethodSignature(member)) {
                 if (member.type === undefined) throw new SyntaxNotSupportedError();
 
-                let propertyName = this.visitPropertyName(member.name);
+                const propertyName = this.visitPropertyName(member.name);
+
+                if (member.typeParameters !== undefined && !Visitor.generics.hasDeclaration(`${interfaceName}_${propertyName}`)) {
+                    Visitor.generics.saveDeclaration(`${interfaceName}_${propertyName}`, member);
+                    continue;
+                }
+
                 let returnType = this.visitTypeNode(member.type, scope);
                 let parameterTypes: Type[] = [];
                 let parameterNames: string[] = [];
@@ -535,9 +570,14 @@ export class Visitor {
                 elementTypes.push(propertyType);
                 elementNames.push(propertyName);
             }
+
+            if (ts.isIndexSignatureDeclaration(member)) {
+                
+            }
         }
 
-        this.builder.insertProperty(structName, elementTypes, elementNames);
+        this.builder.insertProperty(interfaceName, elementTypes, elementNames);
+        return structType;
     }
 
 
@@ -826,7 +866,7 @@ export class Visitor {
             if (Visitor.generics.hasDeclared(wholeName)) {
                 type = this.builder.getStructType(wholeName);
             } else {
-                type = Visitor.generics.createSpecificDeclaration(name, types, scope);
+                type = Visitor.generics.createSpecificDeclaration(typeName, types, scope);
             }
         }
         if (type.isStructTy()) {
@@ -846,7 +886,7 @@ export class Visitor {
         if (typeArguments !== undefined) {
             const types = typeArguments.map(typeArgument => this.visitTypeNode(typeArgument, scope)) as Type[];
             // Specify the name of a generic type and its specific types
-            structType = Visitor.generics.createSpecificDeclaration(name, types, scope);
+            structType = Visitor.generics.createSpecificDeclaration(newExpression.expression as ts.Identifier, types, scope);
         } else {
             structType = this.builder.getStructType(name);
         }
@@ -1271,6 +1311,10 @@ export class Visitor {
                 return this.builder.getLastStructType();
             case ts.SyntaxKind.UnknownKeyword:
                 return this.builder.buildPointerType(this.builder.buildVoidType());
+            case ts.SyntaxKind.UnionType:
+                return this.visitUnionType(typeNode as ts.UnionTypeNode, scope);
+            case ts.SyntaxKind.UndefinedKeyword:
+                return this.builder.buildStructType('Undefined');
             default:
                 throw new SyntaxNotSupportedError();
         }
@@ -1287,7 +1331,7 @@ export class Visitor {
         let className = classDeclaration.name.text;
 
         // If the class declaration is of generic type, save the declaration for later instantiation when specific type information is provided.
-        if (classDeclaration.typeParameters !== undefined && !Visitor.generics.hasDeclaration(className)) {
+        if (classDeclaration.typeParameters !== undefined && specificTypes === undefined) {
             Visitor.generics.saveDeclaration(className, classDeclaration);
             return;
         }
