@@ -524,6 +524,8 @@ export class Visitor {
             interfaceName = Generics.constructWholeName(interfaceName, specificTypes);
         }
 
+        if (this.builder.hasStructType(interfaceName)) return this.builder.getStructType(interfaceName);
+
         const structType = this.builder.buildStructType(interfaceName);
 
         const heritageClauses = interfaceDeclaration.heritageClauses;
@@ -533,6 +535,16 @@ export class Visitor {
                     this.visitTypeNode(type, scope);
                 }
             }
+        }
+
+        // Build mappings of type parameters to specific types
+        const typeParameterMap = new Map<string, llvm.Type>();
+        if (interfaceDeclaration.typeParameters !== undefined && specificTypes !== undefined) {
+            const typeParameters = interfaceDeclaration.typeParameters;
+            for (let i = 0; i < typeParameters.length; i++) {
+                typeParameterMap.set(typeParameters[i].name.text, specificTypes[i]);
+            }
+            Visitor.generics.replaceTypeParameters(typeParameterMap);
         }
 
         let elementTypes: Type[] = [];
@@ -659,6 +671,9 @@ export class Visitor {
             scope.set(wholeName, alloca);
         }
 
+        const enumType = this.builder.buildInt32Type();
+        this.builder.setType(enumName, enumType);
+        return enumType;
     }
 
     public visitBreakStatement(breakOrContinueStatement: ts.BreakOrContinueStatement, scope: Scope) {
@@ -836,11 +851,31 @@ export class Visitor {
         }
     }
 
+    public visitQualifiedName(qualifiedName: ts.QualifiedName, scope: Scope) {
+        const declaration = scope.getDeclaration(qualifiedName);
+        if (declaration === undefined) throw new TypeUndefinedError();
+        this.visitDeclaration(declaration, scope);
+
+        if (!ts.isIdentifier(qualifiedName.left) || !ts.isIdentifier(qualifiedName.right)) throw new SyntaxNotSupportedError();
+        const leftName = this.visitIdentifier(qualifiedName.left);
+        const rightName = this.visitIdentifier(qualifiedName.right);
+        return this.builder.getType(rightName);
+    }
+
     public visitTypeReference(typeReference: ts.TypeReferenceNode, scope?: Scope) {
-        let typeName = typeReference.typeName;
-        if (scope === undefined || !ts.isIdentifier(typeName)) throw new SyntaxNotSupportedError();
-        const typeArguments = typeReference.typeArguments;
-        return this.resolveType(scope, typeName, typeArguments);
+        if (scope === undefined) throw new SyntaxNotSupportedError();
+        const typeName = typeReference.typeName;
+        
+        if (ts.isQualifiedName(typeName)) {
+            return this.visitQualifiedName(typeName, scope);
+        }
+        
+        if (ts.isIdentifier(typeName)) {
+            const typeArguments = typeReference.typeArguments;
+            return this.resolveType(scope, typeName, typeArguments);
+        }
+
+        throw new SyntaxNotSupportedError();
     }
 
     public resolveType(scope: Scope, typeName: ts.Identifier, typeArgs?: ts.NodeArray<ts.TypeNode>) {
@@ -848,14 +883,19 @@ export class Visitor {
         let type: Type | undefined;
         if (typeArgs === undefined) {
             try {
-                type = this.builder.getStructType(name);
+                type = this.builder.getType(name);
             } catch (err) {
-                // if (type === undefined) type = this.builder.buildInt32Type();
-                // If the name cannot be found, then include the missing declaration of the type.
-                const declaration = scope.getDeclaration(typeName);
-                if (declaration === undefined) throw new SyntaxNotSupportedError();
-                this.visitDeclaration(declaration, scope);
-                type = this.builder.getStructType(name);
+                try {
+                    // if (type === undefined) type = this.builder.buildInt32Type();
+                    // If the name cannot be found, then include the missing declaration of the type.
+                    const declaration = scope.getDeclaration(typeName);
+                    if (declaration === undefined) throw new SyntaxNotSupportedError();
+                    this.visitDeclaration(declaration, scope);
+                    type = this.builder.getType(name);
+                } catch (err) {
+                    type = Visitor.generics.getTypeByName(name);
+                    if (type === undefined) throw new TypeUndefinedError();
+                }
             }
         } else {
             // TODO change typename to wholename
@@ -1279,6 +1319,10 @@ export class Visitor {
         return this.builder.buildFunctionType(returnType, parameterTypes);
     }
 
+    public visitIntersectionType(intersectionTypeNode: ts.IntersectionTypeNode, scope: Scope) {
+        
+    }
+
     public visitTypeNode(typeNode?: ts.TypeNode, scope?: Scope) {
         if (typeNode === undefined) return this.builder.buildAnyType();
         switch (typeNode.kind) {
@@ -1316,6 +1360,10 @@ export class Visitor {
                 return this.visitUnionType(typeNode as ts.UnionTypeNode, scope);
             case ts.SyntaxKind.UndefinedKeyword:
                 return this.builder.buildStructType('Undefined');
+            case ts.SyntaxKind.TypePredicate:
+                return this.builder.buildBooleanType();
+            case ts.SyntaxKind.IntersectionType:
+                return this.builder.visitIntersectionType(typeNode as ts.IntersectionTypeNode, scope);
             default:
                 throw new SyntaxNotSupportedError();
         }
@@ -1342,6 +1390,11 @@ export class Visitor {
             // Construct a whole name from typeName and types
             className = Generics.constructWholeName(className, specificTypes);
         }
+
+        if (this.builder.hasStructType(className)) return this.builder.getStructType(className);
+
+        // Build a struct type with the class name
+        const structType = this.builder.buildStructType(className);
 
         const inheritedTypes: llvm.Type[] = [];
         const inheritedNames: string[] = [];
@@ -1401,8 +1454,6 @@ export class Visitor {
         propertyTypes = [...inheritedTypes, ...propertyTypes];
         propertyNames = [...inheritedNames, ...propertyNames];
 
-        // Build a struct type with the class name
-        const structType = this.builder.buildStructType(className);
         // Insert property types into the struct type created above
         this.builder.insertProperty(className, propertyTypes, propertyNames);
 
@@ -1488,38 +1539,47 @@ export class Visitor {
         const structType = this.builder.getStructType(className);
         let ptrType = llvm.PointerType.get(structType, 0);
         parameterTypes.unshift(ptrType);
-        let fn = this.builder.buildClassMethod(`${className}_${methodName}`, returnType, parameterTypes, parameterNames);
-
-        // In the current scope, initialize the parameter names of a function with the arguments received from a caller
-        for (let i = 0; i < parameterNames.length; i++) {
-            let arg = fn.getArguments()[i];
-            if (arg.type.isDoubleTy() || arg.type.isIntegerTy()) {
-                let newAlloca = this.builder.buildAlloca(arg.type);
-                this.builder.buildStore(arg, newAlloca);
-                scope.set(parameterNames[i], newAlloca);
-            } else {
-                scope.set(parameterNames[i], arg);
+        let fn: llvm.Function;
+        if (methodDeclaration.body !== undefined) {
+            fn = this.builder.buildClassMethod(`${className}_${methodName}`, returnType, parameterTypes, parameterNames);
+            // In the current scope, initialize the parameter names of a function with the arguments received from a caller
+            for (let i = 0; i < parameterNames.length; i++) {
+                let arg = fn.getArguments()[i];
+                if (arg.type.isDoubleTy() || arg.type.isIntegerTy()) {
+                    let newAlloca = this.builder.buildAlloca(arg.type);
+                    this.builder.buildStore(arg, newAlloca);
+                    scope.set(parameterNames[i], newAlloca);
+                } else {
+                    scope.set(parameterNames[i], arg);
+                }
             }
+
+            // Use the function name appropriately modified by LLVM
+            scope.setDefaultValues(fn.name, defaultValues);
+            // Change to a new scope
+            scope.enter(methodName, fn);
+
+            let returnValue: Value | Break | Continue | undefined;
+            if (methodDeclaration.body !== undefined) {
+                returnValue = this.visitBlock(methodDeclaration.body, scope);
+                if (returnValue === undefined || isValue(returnValue)) {
+                    this.builder.buildReturn(returnValue);
+                }
+            }
+
+            // Return to the last scope
+            scope.leave(fn);
+            let currentFunction = scope.getCurrentFunction();
+            let currentBlock = currentFunction.getEntryBlock();
+            if (!isBasicBlock(currentBlock)) throw new SyntaxNotSupportedError();
+            this.builder.setCurrentBlock(currentBlock);
+
+        } else {
+            fn = this.builder.buildFunctionDeclaration(`${className}_${methodName}`, returnType, parameterTypes, parameterNames);
         }
 
-        // Use the function name appropriately modified by LLVM
-        scope.setDefaultValues(fn.name, defaultValues);
-        // Change to a new scope
-        scope.enter(methodName, fn);
-
-        let returnValue: Value | Break | Continue | undefined;
-        if (methodDeclaration.body !== undefined) returnValue = this.visitBlock(methodDeclaration.body, scope);
-        if (returnValue === undefined || isValue(returnValue)) {
-            this.builder.buildReturn(returnValue);
-        }
         this.builder.verifyFunction(fn);
 
-        // Return to the last scope
-        scope.leave(fn);
-        let currentFunction = scope.getCurrentFunction();
-        let currentBlock = currentFunction.getEntryBlock();
-        if (!isBasicBlock(currentBlock)) throw new SyntaxNotSupportedError();
-        this.builder.setCurrentBlock(currentBlock);
     }
 
     public visitConstructorDeclaration(constructorDeclaration: ts.ConstructorDeclaration, scope: Scope) {
