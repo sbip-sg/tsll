@@ -512,7 +512,6 @@ export class Visitor {
 
     public visitInterfaceDeclaration(interfaceDeclaration: ts.InterfaceDeclaration, scope: Scope, specificTypes?: Type[]) {
         let interfaceName = interfaceDeclaration.name.text;
-        const structType = this.builder.buildStructType(interfaceName);
 
         if (interfaceDeclaration.typeParameters !== undefined && specificTypes === undefined) {
             Visitor.generics.saveDeclaration(interfaceName, interfaceDeclaration);
@@ -524,6 +523,8 @@ export class Visitor {
             // Construct a whole name from the interface name and the names of specific types
             interfaceName = Generics.constructWholeName(interfaceName, specificTypes);
         }
+
+        const structType = this.builder.buildStructType(interfaceName);
 
         const heritageClauses = interfaceDeclaration.heritageClauses;
         if (heritageClauses !== undefined) {
