@@ -304,6 +304,12 @@ export class Builder {
         throw new TypeUndefinedError();
     }
 
+    public hasStructType(name: string) {
+        const structType = this.llvmModule.getTypeByName(name);
+        if (structType !== null) return true;
+        return false;
+    }
+
     public getLastStructType() {
         if (this.lastStructType === undefined) throw new TypeUndefinedError();
         return this.lastStructType;
@@ -354,6 +360,18 @@ export class Builder {
             ++i;
         } while (i < paramNames.length);
 
+        return fn;
+    }
+
+    public buildFunctionDeclaration(name: string, returnType: Type, paramTypes: Type[], paramNames: string[]) {
+        const methodType = llvm.FunctionType.get(returnType, paramTypes, true);
+        const fn = llvm.Function.create(methodType, llvm.LinkageTypes.ExternalLinkage, name, this.llvmModule);
+        const args = fn.getArguments();
+        let i = 0;
+        do {
+            args[i].name = paramNames[i];
+            ++i;
+        } while (i < paramNames.length);
         return fn;
     }
 
