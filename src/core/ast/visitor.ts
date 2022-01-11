@@ -1,4 +1,4 @@
-import ts, { PropertySignature } from 'typescript';
+import ts, { PropertySignature, RestTypeNode } from 'typescript';
 import { SyntaxNotSupportedError, InstantiateError, VariableUndefinedError, TypeUndefinedError, TypeMismatchError } from '../../common/error';
 import { Builder } from '../ir/builder';
 import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst, isFunction, isConstantInt, isPointerType } from '../ir/types';
@@ -539,12 +539,20 @@ export class Visitor {
 
         // Build mappings of type parameters to specific types
         const typeParameterMap = new Map<string, llvm.Type>();
+        const defaultTypeMap = new Map<string, llvm.Type>();
         if (interfaceDeclaration.typeParameters !== undefined && specificTypes !== undefined) {
             const typeParameters = interfaceDeclaration.typeParameters;
             for (let i = 0; i < typeParameters.length; i++) {
-                typeParameterMap.set(typeParameters[i].name.text, specificTypes[i]);
+                const typeParameterName = typeParameters[i].name.text;
+                const typeParameterDefault = typeParameters[i].default;
+                typeParameterMap.set(typeParameterName, specificTypes[i]);
+                if (typeParameterDefault !== undefined) {
+                    const defaultType = this.visitTypeNode(typeParameterDefault, scope);
+                    defaultTypeMap.set(typeParameterName, defaultType);
+                }
             }
             Visitor.generics.replaceTypeParameters(typeParameterMap);
+            Visitor.generics.replaceDefaultTypes(defaultTypeMap);
         }
 
         let elementTypes: Type[] = [];
@@ -1319,8 +1327,35 @@ export class Visitor {
         return this.builder.buildFunctionType(returnType, parameterTypes);
     }
 
-    public visitIntersectionType(intersectionTypeNode: ts.IntersectionTypeNode, scope: Scope) {
+    public visitIntersectionType(intersectionTypeNode: ts.IntersectionTypeNode, scope?: Scope) {
         
+        // Collect LLVM Type for each typeNode
+        const types: llvm.Type[] = [];
+        for (const typeNode of intersectionTypeNode.types) {
+            const type = this.visitTypeNode(typeNode, scope);
+            types.push(type);
+        }
+
+        const typeSet = new Set<llvm.Type>();
+
+        for (const type of types) {
+            if (type.isPointerTy()) {
+                const ptrElementType = type.elementType;
+                if (ptrElementType.isStructTy()) {
+                    for (let i = 0; i < ptrElementType.numElements; i++) {
+                        const structElementType = ptrElementType.getElementType(i);
+                        typeSet.add(structElementType);
+                    }
+                }
+            } else {
+                throw new SyntaxNotSupportedError();
+            }
+        }
+
+        const typeArray = Array.from(typeSet);
+        const structType = this.builder.buildStructType('intersection.type');
+        this.builder.insertPropertyType('intersection.type', ...typeArray);
+        return structType;
     }
 
     public visitTypeNode(typeNode?: ts.TypeNode, scope?: Scope) {
@@ -1363,10 +1398,34 @@ export class Visitor {
             case ts.SyntaxKind.TypePredicate:
                 return this.builder.buildBooleanType();
             case ts.SyntaxKind.IntersectionType:
-                return this.builder.visitIntersectionType(typeNode as ts.IntersectionTypeNode, scope);
+                return this.visitIntersectionType(typeNode as ts.IntersectionTypeNode, scope);
+            case ts.SyntaxKind.RestType:
+                return this.visitRestType(typeNode as ts.RestTypeNode, scope);
+            case ts.SyntaxKind.TupleType:
+                return this.visitTupleType(typeNode as ts.TupleTypeNode, scope);
             default:
                 throw new SyntaxNotSupportedError();
         }
+    }
+
+    public visitRestType(restTypeNode: ts.RestTypeNode, scope?: Scope) {
+        const elementType = this.visitTypeNode(restTypeNode.type, scope) as Type;
+        return this.builder.buildPointerType(elementType);
+    }
+
+    public visitTupleType(tupleTypeNode: ts.TupleTypeNode, scope?: Scope) {
+        const structType = this.builder.buildStructType('tuple.type');
+
+        // Collect LLVM Type for each element of a tuple
+        const elementTypes: llvm.Type[] = [];
+        for (const element of tupleTypeNode.elements) {
+            const elementType = this.visitTypeNode(element, scope);
+            elementTypes.push(elementType);
+        }
+
+        structType.setBody(elementTypes);
+
+        return structType;
     }
 
     public visitClassDeclaration(classDeclaration: ts.ClassDeclaration, scope: Scope, specificTypes?: Type[]) {
@@ -1429,12 +1488,21 @@ export class Visitor {
 
         // Build mappings of type parameters to specific types
         const typeParameterMap = new Map<string, llvm.Type>();
+        const defaultTypeMap = new Map<string, llvm.Type>();
         if (classDeclaration.typeParameters !== undefined && specificTypes !== undefined) {
             const typeParameters = classDeclaration.typeParameters;
             for (let i = 0; i < typeParameters.length; i++) {
-                typeParameterMap.set(typeParameters[i].name.text, specificTypes[i]);
+                const typeParameterName = typeParameters[i].name.text;
+                const typeParameterDefault = typeParameters[i].default;
+                typeParameterMap.set(typeParameterName, specificTypes[i]);
+
+                if (typeParameterDefault !== undefined) {
+                    const defaultType = this.visitTypeNode(typeParameterDefault, scope);
+                    defaultTypeMap.set(typeParameterName, defaultType);
+                }
             }
             Visitor.generics.replaceTypeParameters(typeParameterMap);
+            Visitor.generics.replaceDefaultTypes(defaultTypeMap);
         }
 
         // Construct the information about each class property
@@ -1504,6 +1572,7 @@ export class Visitor {
         if (ts.isIdentifier(propertyName)) return propertyName.text;
         if (ts.isStringLiteral(propertyName)) return propertyName.text;
         if (ts.isNumericLiteral(propertyName)) return propertyName.text;
+        if (ts.isComputedPropertyName(propertyName)) return 'property.name';
         throw new SyntaxNotSupportedError();
     }
 

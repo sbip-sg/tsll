@@ -9,10 +9,12 @@ export class Generics {
     private declarationMap: Map<string, ts.Declaration>;
     private typeParameterMap: Map<string, llvm.Type>;
     private declaredNames: Set<string>;
+    private defaultTypeMap: Map<string, llvm.Type>;
 
     constructor(private visitor: Visitor) {
         this.declarationMap = new Map();
         this.typeParameterMap = new Map();
+        this.defaultTypeMap = new Map();
         this.declaredNames = new Set();
     }
 
@@ -59,8 +61,15 @@ export class Generics {
         this.typeParameterMap = typeParameterMap;
     }
 
+    public replaceDefaultTypes(defaultTypeMap: Map<string, llvm.Type>) {
+        this.defaultTypeMap = defaultTypeMap;
+    }
+
     public getTypeByName(name: string) {
-        return this.typeParameterMap.get(name);
+        const type = this.typeParameterMap.get(name);
+        const defaultType = this.defaultTypeMap.get(name);
+
+        return type === undefined ? defaultType : type;
     }
 
     public static constructWholeName(name: string, types: llvm.Type[]) {
