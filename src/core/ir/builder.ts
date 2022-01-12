@@ -426,8 +426,8 @@ export class Builder {
     }
 
     public buildAnyType() {
-        let structType = llvm.StructType.create(this.llvmContext, 'any');
-        return llvm.PointerType.get(structType, 0);
+        const voidType = llvm.Type.getVoidTy(this.llvmContext);
+        return llvm.PointerType.get(voidType, 0);
     }
 
     public buildAny() {
