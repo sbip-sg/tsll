@@ -1,4 +1,4 @@
-import ts, { PropertySignature, RestTypeNode } from 'typescript';
+import ts from 'typescript';
 import { SyntaxNotSupportedError, InstantiateError, VariableUndefinedError, TypeUndefinedError, TypeMismatchError } from '../../common/error';
 import { Builder } from '../ir/builder';
 import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst, isFunction, isConstantInt, isPointerType } from '../ir/types';
@@ -7,7 +7,6 @@ import { isString, FunctionLikeDeclaration, Property, isStringArray, isBreak, is
 import llvm, { BasicBlock, CallInst, ConstantInt, DILocalScope, StructType } from '@lungchen/llvm-node';
 import { Generics } from './generics';
 import { Debugger } from '../ir/debugger';
-import { type } from 'os';
 
 export class Visitor {
     private builder: Builder;
@@ -551,8 +550,8 @@ export class Visitor {
                     defaultTypeMap.set(typeParameterName, defaultType);
                 }
             }
-            Visitor.generics.replaceTypeParameters(typeParameterMap);
-            Visitor.generics.replaceDefaultTypes(defaultTypeMap);
+            Visitor.generics.addTypeParameters(typeParameterMap);
+            Visitor.generics.addDefaultTypes(defaultTypeMap);
         }
 
         let elementTypes: Type[] = [];
@@ -596,6 +595,9 @@ export class Visitor {
                 
             }
         }
+
+        Visitor.generics.removeTypeParameters();
+        Visitor.generics.removeDefaultTypes();
 
         this.builder.insertProperty(interfaceName, elementTypes, elementNames);
         return structType;
@@ -710,13 +712,13 @@ export class Visitor {
 
     }
 
-    public visitDeclaration(declaration: ts.Declaration, scope: Scope) {
-        if (ts.isClassDeclaration(declaration)) this.visitClassDeclaration(declaration, scope);
+    public visitDeclaration(declaration: ts.Declaration, scope: Scope, specificTypes?: llvm.Type[]) {
+        if (ts.isClassDeclaration(declaration)) return this.visitClassDeclaration(declaration, scope, specificTypes);
         if (ts.isFunctionDeclaration(declaration)) this.visitFunctionDeclaration(declaration, scope);
         if (ts.isVariableDeclaration(declaration)) this.visitVariableDeclaration(declaration, scope);
-        if (ts.isInterfaceDeclaration(declaration)) this.visitInterfaceDeclaration(declaration, scope);
+        if (ts.isInterfaceDeclaration(declaration)) return this.visitInterfaceDeclaration(declaration, scope, specificTypes);
         if (ts.isEnumDeclaration(declaration)) this.visitEnumDeclaration(declaration, scope);
-        if (ts.isTypeAliasDeclaration(declaration)) this.visitTypeAliasDeclaration(declaration, scope);
+        if (ts.isTypeAliasDeclaration(declaration)) return this.visitTypeAliasDeclaration(declaration, scope, specificTypes);
     }
 
     public visitExpression(expression: ts.Expression, scope: Scope): string | Value {
@@ -739,20 +741,55 @@ export class Visitor {
         throw new SyntaxNotSupportedError();
     }
 
-    public visitTypeAliasDeclaration(typeAliasDeclaration: ts.TypeAliasDeclaration, scope: Scope) {
-        const name = this.visitIdentifier(typeAliasDeclaration.name);
+    public visitTypeAliasDeclaration(typeAliasDeclaration: ts.TypeAliasDeclaration, scope: Scope, specificTypes?: llvm.Type[]) {
+        let typeAliasName = this.visitIdentifier(typeAliasDeclaration.name);
+
+        // If a type alias declaration is of generic type, save the declaration for later instantiation
+        // when specific type information is provided.
+        if (typeAliasDeclaration.typeParameters !== undefined && specificTypes === undefined) {
+            Visitor.generics.saveDeclaration(typeAliasName, typeAliasDeclaration);
+            return;
+        }
+
+        // Change the type alias name to be more specific
+        if (specificTypes !== undefined) {
+            // Construct a whole name from the original type alias name and each type's name
+            typeAliasName = Generics.constructWholeName(typeAliasName, specificTypes);
+        }
+
+        // Build mappings of type parameters to specific types
+        const typeParameterMap = new Map<string, llvm.Type>();
+        const defaultTypeMap = new Map<string, llvm.Type>();
+        if (typeAliasDeclaration.typeParameters !== undefined && specificTypes !== undefined) {
+            const typeParameters = typeAliasDeclaration.typeParameters;
+            for (let i = 0; i < typeParameters.length; i++) {
+                const typeParameterName = typeParameters[i].name.text;
+                const typeParameterDefault = typeParameters[i].default;
+                typeParameterMap.set(typeParameterName, specificTypes[i]);
+                if (typeParameterDefault !== undefined) {
+                    const defaultType = this.visitTypeNode(typeParameterDefault, scope);
+                    defaultTypeMap.set(typeParameterName, defaultType);
+                }
+            }
+            Visitor.generics.addTypeParameters(typeParameterMap);
+            Visitor.generics.addDefaultTypes(defaultTypeMap);
+        }
+
         // Create a struct in advance and populate with element types and names later
         const typeNode = typeAliasDeclaration.type;
-        let type: llvm.Type;
+        let type: llvm.StructType;
         if (ts.isIndexedAccessTypeNode(typeNode)) {
-            this.builder.buildStructType(name);
+            this.builder.buildStructType(typeAliasName);
             this.visitTypeNode(typeNode, scope);
-            type = this.builder.getStructType(name);
+            type = this.builder.getStructType(typeAliasName);
         } else {
-            type = this.visitTypeNode(typeNode, scope)
+            type = this.visitTypeNode(typeNode, scope) as llvm.StructType;
             // Build a relationiship between the name and the type
-            this.builder.setType(name, type);
+            this.builder.setType(typeAliasName, type);
         }
+
+        Visitor.generics.removeTypeParameters();
+        Visitor.generics.removeDefaultTypes();
 
         return type;
     }
@@ -1501,8 +1538,8 @@ export class Visitor {
                     defaultTypeMap.set(typeParameterName, defaultType);
                 }
             }
-            Visitor.generics.replaceTypeParameters(typeParameterMap);
-            Visitor.generics.replaceDefaultTypes(defaultTypeMap);
+            Visitor.generics.addTypeParameters(typeParameterMap);
+            Visitor.generics.addDefaultTypes(defaultTypeMap);
         }
 
         // Construct the information about each class property
@@ -1542,6 +1579,9 @@ export class Visitor {
         }
 
         scope.leave();
+
+        Visitor.generics.removeTypeParameters();
+        Visitor.generics.removeDefaultTypes();
 
         this.builder.setCurrentBlock(currentBlock);
 
