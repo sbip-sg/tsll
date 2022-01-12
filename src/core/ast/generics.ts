@@ -7,14 +7,14 @@ import { Visitor } from "./visitor";
 /* Helper class to save generic declarations and instantiate them with specific types later */
 export class Generics {
     private declarationMap: Map<string, ts.Declaration>;
-    private typeParameterMap: Map<string, llvm.Type>;
+    private typeParameterMaps: Map<string, llvm.Type>[];
+    private defaultTypeMaps: Map<string, llvm.Type>[];
     private declaredNames: Set<string>;
-    private defaultTypeMap: Map<string, llvm.Type>;
 
     constructor(private visitor: Visitor) {
         this.declarationMap = new Map();
-        this.typeParameterMap = new Map();
-        this.defaultTypeMap = new Map();
+        this.typeParameterMaps = [];
+        this.defaultTypeMaps = [];
         this.declaredNames = new Set();
     }
 
@@ -48,33 +48,48 @@ export class Generics {
             throw new TypeUndefinedError();
         }
 
-        let structType: llvm.StructType | undefined;
-        if (ts.isClassDeclaration(declaration)) structType = this.visitor.visitClassDeclaration(declaration, scope, types);
-        if (ts.isInterfaceDeclaration(declaration)) structType = this.visitor.visitInterfaceDeclaration(declaration, scope, types);
+        const structType = this.visitor.visitDeclaration(declaration, scope, types);
         if (structType === undefined) throw new TypeUndefinedError();
         const wholeName = Generics.constructWholeName(name, types);
         this.declaredNames.add(wholeName);
         return structType;
     }
 
-    public replaceTypeParameters(typeParameterMap: Map<string, llvm.Type>) {
-        this.typeParameterMap = typeParameterMap;
+    public addTypeParameters(typeParameterMap: Map<string, llvm.Type>) {
+        this.typeParameterMaps.push(typeParameterMap);
     }
 
-    public replaceDefaultTypes(defaultTypeMap: Map<string, llvm.Type>) {
-        this.defaultTypeMap = defaultTypeMap;
+    public addDefaultTypes(defaultTypeMap: Map<string, llvm.Type>) {
+        this.defaultTypeMaps.push(defaultTypeMap);
     }
 
-    public getTypeByName(name: string) {
-        const type = this.typeParameterMap.get(name);
-        const defaultType = this.defaultTypeMap.get(name);
+    public removeTypeParameters() {
+        this.typeParameterMaps.pop();
+    }
+
+    public removeDefaultTypes() {
+        this.defaultTypeMaps.pop();
+    }
+
+    public getTypeByName(name: string) { 
+        const type = this.typeParameterMaps[this.typeParameterMaps.length - 1].get(name);
+        const defaultType = this.defaultTypeMaps[this.defaultTypeMaps.length - 1].get(name);
 
         return type === undefined ? defaultType : type;
     }
 
     public static constructWholeName(name: string, types: llvm.Type[]) {
         let wholeName = name;
-        types.every(type => wholeName = wholeName.concat(`_${type.toString()}`));
+        types.every(type => {
+            // Resolve the type information from the pointer type
+            if (type.isPointerTy()) type = type.elementType;
+
+            if (type.isStructTy()) {
+                wholeName = wholeName.concat(`_${type.name}`);    
+            } else {
+                wholeName = wholeName.concat(`_${type.toString()}`);
+            }
+        });
         return wholeName;
     }
 }
