@@ -71,11 +71,18 @@ export class Generics {
         this.defaultTypeMaps.pop();
     }
 
-    public getTypeByName(name: string) { 
-        const type = this.typeParameterMaps[this.typeParameterMaps.length - 1].get(name);
-        const defaultType = this.defaultTypeMaps[this.defaultTypeMaps.length - 1].get(name);
+    public getTypeByName(name: string) {
 
-        return type === undefined ? defaultType : type;
+        if (this.typeParameterMaps.length > 0) {
+            const type = this.typeParameterMaps[this.typeParameterMaps.length - 1].get(name);
+            if (type !== undefined) return type;
+        }
+
+        if (this.defaultTypeMaps.length > 0) {
+            return this.defaultTypeMaps[this.defaultTypeMaps.length - 1].get(name);
+        }
+
+        return undefined;
     }
 
     public static constructWholeName(name: string, types: llvm.Type[]) {
