@@ -113,7 +113,7 @@ export class Visitor {
         throw new SyntaxNotSupportedError();
     }
 
-    public visitUnionType(unionTypeNode: ts.UnionTypeNode, scope?: Scope) {
+    public visitUnionType(unionTypeNode: ts.UnionTypeNode, scope: Scope) {
 
         let largestType = this.builder.buildVoidType();
         let largestSize: number = 0;
@@ -126,14 +126,14 @@ export class Visitor {
             }
         }
 
-        const structType = this.builder.buildStructType('union.func');
+        const structType = this.builder.buildStructType('');
 
         structType.setBody([largestType]);
         return structType;
     }
 
-    public visitArrayType(arrayTypeNode: ts.ArrayTypeNode) {
-        const type = this.visitTypeNode(arrayTypeNode.elementType) as Type;
+    public visitArrayType(arrayTypeNode: ts.ArrayTypeNode, scope: Scope) {
+        const type = this.visitTypeNode(arrayTypeNode.elementType, scope) as Type;
         return type;
     }
 
@@ -215,7 +215,7 @@ export class Visitor {
 
     
 
-    public visitBindingName(bindingName: ts.BindingName, scope?: Scope) {
+    public visitBindingName(bindingName: ts.BindingName, scope: Scope) {
         if (ts.isIdentifier(bindingName)) return this.visitIdentifier(bindingName, scope);
         // if (ts.isObjectBindingPattern(bindingName)) return this.visitObjectBindingPattern(bindingName, scope);
         // if (ts.isArrayBindingPattern(bindingName)) return this.visitArrayBindingPattern(bindingName, scope);
@@ -550,9 +550,10 @@ export class Visitor {
                     defaultTypeMap.set(typeParameterName, defaultType);
                 }
             }
-            Visitor.generics.addTypeParameters(typeParameterMap);
-            Visitor.generics.addDefaultTypes(defaultTypeMap);
         }
+
+        Visitor.generics.addTypeParameters(typeParameterMap);
+        Visitor.generics.addDefaultTypes(defaultTypeMap);
 
         let elementTypes: Type[] = [];
         let elementNames: string[] = [];
@@ -560,7 +561,7 @@ export class Visitor {
             if (ts.isMethodSignature(member)) {
                 if (member.type === undefined) throw new SyntaxNotSupportedError();
 
-                const propertyName = this.visitPropertyName(member.name);
+                const propertyName = this.visitPropertyName(member.name, scope);
 
                 if (member.typeParameters !== undefined && !Visitor.generics.hasDeclaration(`${interfaceName}_${propertyName}`)) {
                     Visitor.generics.saveDeclaration(`${interfaceName}_${propertyName}`, member);
@@ -585,7 +586,7 @@ export class Visitor {
 
             if (ts.isPropertySignature(member)) {
                 if (member.type === undefined) throw new SyntaxNotSupportedError();
-                let propertyName = this.visitPropertyName(member.name);
+                let propertyName = this.visitPropertyName(member.name, scope);
                 let propertyType = this.visitTypeNode(member.type, scope);
                 elementTypes.push(propertyType);
                 elementNames.push(propertyName);
@@ -658,7 +659,7 @@ export class Visitor {
 
         let increment = 0;
         for (const member of enumDeclaration.members) {
-            const propertyName = this.visitPropertyName(member.name);
+            const propertyName = this.visitPropertyName(member.name, scope);
             const wholeName = `${enumName}_${propertyName}`;
             const initializer = member.initializer;
             let propertyValue: Value;
@@ -742,7 +743,7 @@ export class Visitor {
     }
 
     public visitTypeAliasDeclaration(typeAliasDeclaration: ts.TypeAliasDeclaration, scope: Scope, specificTypes?: llvm.Type[]) {
-        let typeAliasName = this.visitIdentifier(typeAliasDeclaration.name);
+        let typeAliasName = this.visitIdentifier(typeAliasDeclaration.name, scope);
 
         // If a type alias declaration is of generic type, save the declaration for later instantiation
         // when specific type information is provided.
@@ -771,9 +772,10 @@ export class Visitor {
                     defaultTypeMap.set(typeParameterName, defaultType);
                 }
             }
-            Visitor.generics.addTypeParameters(typeParameterMap);
-            Visitor.generics.addDefaultTypes(defaultTypeMap);
         }
+
+        Visitor.generics.addTypeParameters(typeParameterMap);
+        Visitor.generics.addDefaultTypes(defaultTypeMap);
 
         // Create a struct in advance and populate with element types and names later
         const typeNode = typeAliasDeclaration.type;
@@ -783,9 +785,11 @@ export class Visitor {
             this.visitTypeNode(typeNode, scope);
             type = this.builder.getStructType(typeAliasName);
         } else {
+            const structType = this.builder.buildStructType(typeAliasName);
             type = this.visitTypeNode(typeNode, scope) as llvm.StructType;
+            structType.setBody([type]);
             // Build a relationiship between the name and the type
-            this.builder.setType(typeAliasName, type);
+            this.builder.setType(typeAliasName, structType);
         }
 
         Visitor.generics.removeTypeParameters();
@@ -885,14 +889,25 @@ export class Visitor {
         throw new SyntaxNotSupportedError();
     }
 
-    public visitExpressionWithTypeArguments(expressionWithTypeArguments: ts.ExpressionWithTypeArguments, scope?: Scope) {
+    public visitExpressionWithTypeArguments(expressionWithTypeArguments: ts.ExpressionWithTypeArguments, scope: Scope) {
+        if (scope === undefined) throw new SyntaxNotSupportedError();
+        
         const expression = expressionWithTypeArguments.expression;
-        if (scope === undefined || !ts.isIdentifier(expression)) throw new SyntaxNotSupportedError();
+
+        let typeName: ts.Identifier;
+        if (ts.isPropertyAccessExpression(expression)) {
+            typeName = expression.name as ts.Identifier;
+        } else if (ts.isIdentifier(expression)) {
+            typeName = expression;
+        } else {
+            throw new SyntaxNotSupportedError();
+        }
+
         const typeArguments = expressionWithTypeArguments.typeArguments;
         try {
-            return this.builder.getStructType(expression.text);
+            return this.builder.getStructType(typeName.text);
         } catch (err) {
-            return  this.resolveType(scope, expression, typeArguments);
+            return  this.resolveType(scope, typeName, typeArguments);
         }
     }
 
@@ -902,12 +917,12 @@ export class Visitor {
         this.visitDeclaration(declaration, scope);
 
         if (!ts.isIdentifier(qualifiedName.left) || !ts.isIdentifier(qualifiedName.right)) throw new SyntaxNotSupportedError();
-        const leftName = this.visitIdentifier(qualifiedName.left);
-        const rightName = this.visitIdentifier(qualifiedName.right);
+        const leftName = this.visitIdentifier(qualifiedName.left, scope);
+        const rightName = this.visitIdentifier(qualifiedName.right, scope);
         return this.builder.getType(rightName);
     }
 
-    public visitTypeReference(typeReference: ts.TypeReferenceNode, scope?: Scope) {
+    public visitTypeReference(typeReference: ts.TypeReferenceNode, scope: Scope) {
         if (scope === undefined) throw new SyntaxNotSupportedError();
         const typeName = typeReference.typeName;
         
@@ -1008,7 +1023,7 @@ export class Visitor {
             if (ts.isPropertyAssignment(property)) {
                 // If a property does not have a name or initializer, then it is grammatically wrong.
                 if (property.name === undefined || property.initializer === undefined) throw new SyntaxNotSupportedError();
-                let key = this.visitPropertyName(property.name);
+                let key = this.visitPropertyName(property.name, scope);
                 let visited = this.visitExpression(property.initializer, scope)
                 let value = this.resolveNameDefinition(visited, scope);
                 keyArray.push(key);
@@ -1236,7 +1251,7 @@ export class Visitor {
         throw new SyntaxNotSupportedError();
     }
 
-    public visitIdentifier(identifier: ts.Identifier, scope?: Scope) {
+    public visitIdentifier(identifier: ts.Identifier, scope: Scope) {
         return identifier.text;
     }
 
@@ -1250,7 +1265,7 @@ export class Visitor {
         return this.builder.buildNumber(num);
     }
 
-    public visitTypeOperator(typeOperatorNode: ts.TypeOperatorNode, scope?: Scope): Type {
+    public visitTypeOperator(typeOperatorNode: ts.TypeOperatorNode, scope: Scope): Type {
         switch (typeOperatorNode.operator) {
             case ts.SyntaxKind.KeyOfKeyword:
                 return this.visitTypeNode(typeOperatorNode.type, scope);
@@ -1259,7 +1274,7 @@ export class Visitor {
         }
     }
 
-    public visitIndexedAccessType(indexedAccessType: ts.IndexedAccessTypeNode, scope?: Scope) {
+    public visitIndexedAccessType(indexedAccessType: ts.IndexedAccessTypeNode, scope: Scope) {
         let objectType = this.visitTypeNode(indexedAccessType.objectType, scope);
         if (!objectType.isPointerTy()) throw new SyntaxNotSupportedError();
         objectType = objectType.elementType;
@@ -1305,7 +1320,7 @@ export class Visitor {
     }
 
 
-    public visitIndexType(typeNode: ts.TypeNode, scope?: Scope) {
+    public visitIndexType(typeNode: ts.TypeNode, scope: Scope) {
         switch (typeNode.kind) {
             case ts.SyntaxKind.TypeOperator:
                 return this.visitTypeOperator(typeNode as ts.TypeOperatorNode, scope);
@@ -1318,13 +1333,16 @@ export class Visitor {
 
     public visitLiteralType(literalType: ts.LiteralTypeNode) {
         const literal = literalType.literal;
-        if (ts.isStringLiteral(literal) || ts.isNumericLiteral(literal)) return literal.text;
-        throw new SyntaxNotSupportedError();
+        if (ts.isStringLiteral(literal) || ts.isNumericLiteral(literal)) return this.builder.buildStringType(10);
+        if (literal.kind === ts.SyntaxKind.NullKeyword) return this.builder.buildStructType('null');
+        if (literal.kind === ts.SyntaxKind.BooleanKeyword) return this.builder.buildBooleanType();
+        if (literal.kind === ts.SyntaxKind.TrueKeyword) return this.builder.buildStructType('true');
+        if (literal.kind === ts.SyntaxKind.FalseKeyword) return this.builder.buildStructType('false');
+        throw new SyntaxNotSupportedError('Invalid literal type');
     }
 
-    public visitTypeLiteral(typeLiteral: ts.TypeLiteralNode, scope?: Scope) {
-        const typeName = 'Anonymous_Type';
-        const structType = this.builder.buildStructType(typeName);
+    public visitTypeLiteral(typeLiteral: ts.TypeLiteralNode, scope: Scope) {
+        const structType = this.builder.buildStructType('');
         const propertyNames: string[] = [];
         const propertyTypes: llvm.Type[] = [];
         for (const member of typeLiteral.members) {
@@ -1332,28 +1350,28 @@ export class Visitor {
             propertyNames.push(propertyName);
             propertyTypes.push(propertyType);
         }
-        this.builder.insertProperty(typeName, propertyTypes, propertyNames);
+
+        this.builder.setProperty(structType, propertyTypes, propertyNames);
         return structType;
     }
 
-    public visitPropertySignature(propertySignature: ts.PropertySignature, scope?: Scope) {
-        const propertyName = this.visitPropertyName(propertySignature.name);
+    public visitPropertySignature(propertySignature: ts.PropertySignature, scope: Scope) {
+        const propertyName = this.visitPropertyName(propertySignature.name, scope);
         // When the type of a property is undefined, then the type name of the property is the property name.
         let propertyType: llvm.Type;
         if (propertySignature.type === undefined) {
             propertyType = this.builder.getStructType(propertyName);
         } else {
-            propertyType = this.visitTypeNode(propertySignature.type);
+            propertyType = this.visitTypeNode(propertySignature.type, scope);
         }
         return { propertyName, propertyType };
     }
 
-    public visitFunctionType(functionTypeNode: ts.FunctionTypeNode, scope?: Scope) {
-        const funcTypeName = 'Anonymous_FuncType';
+    public visitFunctionType(functionTypeNode: ts.FunctionTypeNode, scope: Scope) {
         const parameterNames: string[] = [];
         const parameterTypes: llvm.Type[] = [];
         for (const parameter of functionTypeNode.parameters) {
-            const parameterName = this.visitBindingName(parameter.name);
+            const parameterName = this.visitBindingName(parameter.name, scope);
             const parameterType = this.visitTypeNode(parameter.type, scope);
             parameterNames.push(parameterName);
             parameterTypes.push(parameterType);
@@ -1364,8 +1382,8 @@ export class Visitor {
         return this.builder.buildFunctionType(returnType, parameterTypes);
     }
 
-    public visitIntersectionType(intersectionTypeNode: ts.IntersectionTypeNode, scope?: Scope) {
-        
+    public visitIntersectionType(intersectionTypeNode: ts.IntersectionTypeNode, scope: Scope) {
+
         // Collect LLVM Type for each typeNode
         const types: llvm.Type[] = [];
         for (const typeNode of intersectionTypeNode.types) {
@@ -1390,12 +1408,13 @@ export class Visitor {
         }
 
         const typeArray = Array.from(typeSet);
-        const structType = this.builder.buildStructType('intersection.type');
-        this.builder.insertPropertyType('intersection.type', ...typeArray);
+        const structType = this.builder.buildStructType('');
+        structType.setBody(typeArray);
         return structType;
     }
 
     public visitTypeNode(typeNode?: ts.TypeNode, scope?: Scope) {
+        if (scope === undefined) throw new SyntaxNotSupportedError();
         if (typeNode === undefined) return this.builder.buildAnyType();
         switch (typeNode.kind) {
             case ts.SyntaxKind.NumberKeyword:
@@ -1419,7 +1438,7 @@ export class Visitor {
             case ts.SyntaxKind.FunctionType:
                 return this.visitFunctionType(typeNode as ts.FunctionTypeNode, scope);
             case ts.SyntaxKind.ArrayType:
-                return this.visitArrayType(typeNode as ts.ArrayTypeNode);
+                return this.visitArrayType(typeNode as ts.ArrayTypeNode, scope);
             case ts.SyntaxKind.IndexedAccessType:
                 return this.visitIndexedAccessType(typeNode as ts.IndexedAccessTypeNode, scope);
             case ts.SyntaxKind.TypeOperator:
@@ -1431,7 +1450,7 @@ export class Visitor {
             case ts.SyntaxKind.UnionType:
                 return this.visitUnionType(typeNode as ts.UnionTypeNode, scope);
             case ts.SyntaxKind.UndefinedKeyword:
-                return this.builder.buildStructType('Undefined');
+                return this.builder.buildStructType('undefined');
             case ts.SyntaxKind.TypePredicate:
                 return this.builder.buildBooleanType();
             case ts.SyntaxKind.IntersectionType:
@@ -1440,25 +1459,52 @@ export class Visitor {
                 return this.visitRestType(typeNode as ts.RestTypeNode, scope);
             case ts.SyntaxKind.TupleType:
                 return this.visitTupleType(typeNode as ts.TupleTypeNode, scope);
+            case ts.SyntaxKind.LiteralType:
+                return this.visitLiteralType(typeNode as ts.LiteralTypeNode);
+            case ts.SyntaxKind.SymbolKeyword:
+                return this.builder.buildStructType('symbol');
+            case ts.SyntaxKind.ParenthesizedType:
+                return this.visitParenthesizedType(typeNode as ts.ParenthesizedTypeNode, scope);
+            case ts.SyntaxKind.NullKeyword:
+                return this.builder.buildStructType('null');
+            case ts.SyntaxKind.BigIntKeyword:
+                return this.builder.buildStructType('bigint');
             default:
                 throw new SyntaxNotSupportedError();
         }
     }
 
-    public visitRestType(restTypeNode: ts.RestTypeNode, scope?: Scope) {
+    public visitParenthesizedType(parenthesizedTypeNode: ts.ParenthesizedTypeNode, scope: Scope) {
+        const type = this.visitTypeNode(parenthesizedTypeNode.type, scope) as Type;
+        return type;
+    }
+
+    public visitRestType(restTypeNode: ts.RestTypeNode, scope: Scope) {
         const elementType = this.visitTypeNode(restTypeNode.type, scope) as Type;
         return this.builder.buildPointerType(elementType);
     }
 
-    public visitTupleType(tupleTypeNode: ts.TupleTypeNode, scope?: Scope) {
-        const structType = this.builder.buildStructType('tuple.type');
-
+    public visitTupleType(tupleTypeNode: ts.TupleTypeNode, scope: Scope) {
         // Collect LLVM Type for each element of a tuple
         const elementTypes: llvm.Type[] = [];
         for (const element of tupleTypeNode.elements) {
             const elementType = this.visitTypeNode(element, scope);
             elementTypes.push(elementType);
         }
+
+        const names = elementTypes.map(type => {
+            if (type.isPointerTy()) type = type.elementType;
+            if (type.isStructTy()) return type.name;
+            return type.toString();
+        });
+
+        let wholeName = '';
+        
+        names.every(name => wholeName = wholeName.concat(`${name}`));
+
+        wholeName = `[${wholeName}]`;
+
+        const structType = this.builder.buildStructType(wholeName);
 
         structType.setBody(elementTypes);
 
@@ -1499,7 +1545,8 @@ export class Visitor {
             for (const heritageClause of heritageClauses) {
                 for (const type of heritageClause.types) {
                     if (heritageClause.token === ts.SyntaxKind.ExtendsKeyword) {
-                        const inheritedType = this.visitTypeNode(type, scope);
+                        let inheritedType = this.visitTypeNode(type, scope);
+                        if (inheritedType.isPointerTy()) inheritedType = inheritedType.elementType;
                         if (inheritedType.isStructTy()) {
                             scope.resetBaseClassName(inheritedType.name);
                             const inheritedPtrType = this.builder.buildPointerType(inheritedType)
@@ -1538,9 +1585,10 @@ export class Visitor {
                     defaultTypeMap.set(typeParameterName, defaultType);
                 }
             }
-            Visitor.generics.addTypeParameters(typeParameterMap);
-            Visitor.generics.addDefaultTypes(defaultTypeMap);
         }
+
+        Visitor.generics.addTypeParameters(typeParameterMap);
+        Visitor.generics.addDefaultTypes(defaultTypeMap);
 
         // Construct the information about each class property
         let properties: Property[] = [];
@@ -1591,7 +1639,7 @@ export class Visitor {
     public visitPropertyDeclaration(propertyDeclaration: ts.PropertyDeclaration, scope: Scope) {
 
         if (propertyDeclaration.type === undefined) throw new SyntaxNotSupportedError();
-        let propertyName = this.visitPropertyName(propertyDeclaration.name);
+        let propertyName = this.visitPropertyName(propertyDeclaration.name, scope);
         const propertyType = this.visitTypeNode(propertyDeclaration.type, scope);
 
         let property: Property = {
@@ -1608,18 +1656,34 @@ export class Visitor {
         return property;
     }
 
-    public visitPropertyName(propertyName: ts.PropertyName) {
+    public visitPropertyName(propertyName: ts.PropertyName, scope: Scope) {
         if (ts.isIdentifier(propertyName)) return propertyName.text;
         if (ts.isStringLiteral(propertyName)) return propertyName.text;
         if (ts.isNumericLiteral(propertyName)) return propertyName.text;
-        if (ts.isComputedPropertyName(propertyName)) return 'property.name';
+        if (ts.isComputedPropertyName(propertyName)) return this.visitComputedPropertyName(propertyName, scope);
         throw new SyntaxNotSupportedError();
     }
 
-    public visitMethodDeclaration(methodDeclaration: ts.MethodDeclaration, scope: Scope) {
+    public visitComputedPropertyName(computedPropertyName: ts.ComputedPropertyName, scope: Scope) {
+        return this.visitExpression(computedPropertyName.expression, scope) as string;
+    }
+
+    public visitMethodDeclaration(methodDeclaration: ts.MethodDeclaration, scope: Scope, specificTypes?: Type[]) {
 
         if (methodDeclaration.type === undefined) throw new SyntaxNotSupportedError();
-        let methodName = this.visitPropertyName(methodDeclaration.name);
+        let methodName = this.visitPropertyName(methodDeclaration.name, scope);
+
+        if (methodDeclaration.typeParameters !== undefined && specificTypes === undefined) {
+            Visitor.generics.saveDeclaration(methodName, methodDeclaration);
+            return;
+        }
+
+        // Change the method name to be more specific
+        if (specificTypes !== undefined) {
+            // Construct a whole name from the method name and the names of specific types
+            methodName = Generics.constructWholeName(methodName, specificTypes);
+        }
+
         let returnType = this.visitTypeNode(methodDeclaration.type, scope);
         if (returnType.isPointerTy()) returnType = this.builder.buildPointerType(returnType);
         let className = scope.getCurrentScopeName();

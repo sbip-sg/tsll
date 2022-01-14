@@ -158,11 +158,11 @@ export class Builder {
     }
 
     public verifyFunction(fn: llvm.Function) {
-        llvm.verifyFunction(fn);
+        // llvm.verifyFunction(fn);
     }
 
     public verifyModule() {
-        llvm.verifyModule(this.llvmModule);
+        // llvm.verifyModule(this.llvmModule);
     }
 
     public buildIntAdd(lhs: Value, rhs: Value, name?: string) {
@@ -295,6 +295,11 @@ export class Builder {
         if (structType === null) throw new TypeUndefinedError();
         structType.setBody(types);
         this.structMap.set(name, names);
+        this.lastStructType = structType;
+    }
+
+    public setProperty(structType: llvm.StructType, types: Type[], names: string[]) {
+        structType.setBody(types);
         this.lastStructType = structType;
     }
 

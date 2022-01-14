@@ -32,7 +32,7 @@ export class Generics {
     }
 
     public createSpecificDeclaration(typeName: ts.Identifier, types: llvm.Type[], scope: Scope) {
-        const name = this.visitor.visitIdentifier(typeName);
+        const name = this.visitor.visitIdentifier(typeName, scope);
         // Make sure that declared name does exist.
         const prevDeclaration = this.declarationMap.get(name);
         const reDeclaration = scope.getDeclaration(typeName);
