@@ -527,15 +527,6 @@ export class Visitor {
 
         const structType = this.builder.buildStructType(interfaceName);
 
-        const heritageClauses = interfaceDeclaration.heritageClauses;
-        if (heritageClauses !== undefined) {
-            for (const heritageClause of heritageClauses) {
-                for (const type of heritageClause.types) {
-                    this.visitTypeNode(type, scope);
-                }
-            }
-        }
-
         // Build mappings of type parameters to specific types
         const typeParameterMap = new Map<string, llvm.Type>();
         const defaultTypeMap = new Map<string, llvm.Type>();
@@ -554,6 +545,15 @@ export class Visitor {
 
         Visitor.generics.addTypeParameters(typeParameterMap);
         Visitor.generics.addDefaultTypes(defaultTypeMap);
+
+        const heritageClauses = interfaceDeclaration.heritageClauses;
+        if (heritageClauses !== undefined) {
+            for (const heritageClause of heritageClauses) {
+                for (const type of heritageClause.types) {
+                    this.visitTypeNode(type, scope);
+                }
+            }
+        }
 
         let elementTypes: Type[] = [];
         let elementNames: string[] = [];
@@ -1538,28 +1538,6 @@ export class Visitor {
         // Build a struct type with the class name
         const structType = this.builder.buildStructType(className);
 
-        const inheritedTypes: llvm.Type[] = [];
-        const inheritedNames: string[] = [];
-        const heritageClauses = classDeclaration.heritageClauses;
-        if (heritageClauses !== undefined) {
-            for (const heritageClause of heritageClauses) {
-                for (const type of heritageClause.types) {
-                    if (heritageClause.token === ts.SyntaxKind.ExtendsKeyword) {
-                        let inheritedType = this.visitTypeNode(type, scope);
-                        if (inheritedType.isPointerTy()) inheritedType = inheritedType.elementType;
-                        if (inheritedType.isStructTy()) {
-                            scope.resetBaseClassName(inheritedType.name);
-                            const inheritedPtrType = this.builder.buildPointerType(inheritedType)
-                            inheritedTypes.push(inheritedPtrType);
-                            if (inheritedType.name !== undefined) inheritedNames.push(inheritedType.name);
-                        }
-                    }
-                }
-            }
-        }
-
-        scope.enter(className);
-
         // Dispatch a variety of properties of the class
         let propertyDeclarations: ts.PropertyDeclaration[] = [];
         let methodDeclarations: ts.MethodDeclaration[] = [];
@@ -1589,6 +1567,28 @@ export class Visitor {
 
         Visitor.generics.addTypeParameters(typeParameterMap);
         Visitor.generics.addDefaultTypes(defaultTypeMap);
+
+        const inheritedTypes: llvm.Type[] = [];
+        const inheritedNames: string[] = [];
+        const heritageClauses = classDeclaration.heritageClauses;
+        if (heritageClauses !== undefined) {
+            for (const heritageClause of heritageClauses) {
+                for (const type of heritageClause.types) {
+                    if (heritageClause.token === ts.SyntaxKind.ExtendsKeyword) {
+                        let inheritedType = this.visitTypeNode(type, scope);
+                        if (inheritedType.isPointerTy()) inheritedType = inheritedType.elementType;
+                        if (inheritedType.isStructTy()) {
+                            scope.resetBaseClassName(inheritedType.name);
+                            const inheritedPtrType = this.builder.buildPointerType(inheritedType)
+                            inheritedTypes.push(inheritedPtrType);
+                            if (inheritedType.name !== undefined) inheritedNames.push(inheritedType.name);
+                        }
+                    }
+                }
+            }
+        }
+
+        scope.enter(className);
 
         // Construct the information about each class property
         let properties: Property[] = [];
