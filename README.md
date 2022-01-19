@@ -1,20 +1,20 @@
-[![Actions Status](https://github.com/sbip-sg/typescriptllvm/workflows/CI/badge.svg)](https://github.com/sbip-sg/typescriptllvm/actions)
-## What is typescriptllvm?
-typescriptllvm is a TypeScript frontend written in TypeScript for LLVM IR generation. For now, this work is mainly used for blockchain smart contract verification. Before we transpile Node.js code in Typescript into Javascript artifacts, Typescriptllvm combined with other backend analysis tools provides a powerful framework to search for vulnerabilities and security issues as smart contract developers would not realize while writing such smart contracts.
+[![Actions Status](https://github.com/sbip-sg/tsll/workflows/CI/badge.svg)](https://github.com/sbip-sg/tsll/actions)
+## What is tsll?
+Tsll is a Typescript compiler frontend for LLVM IR generation. Our goal of this work is to verify blockchain smart contracts through the generated IR. Before we transpile Node.js code in Typescript into Javascript artifacts, tsll combined with other backend analysis tools could provide a powerful framework to search for vulnerabilities and security issues as smart contract developers would not realize while writing such smart contracts.
 
 #### **Design idea**
-Typescriptllvm extracts information on Abstract Syntax Tree (AST) generated with [Typescript Compiler API](https://github.com/Microsoft/TypeScript/wiki/Using-the-Compiler-API) by visiting each node, and create instructions accordingly with [LLVM Typescript bindings](https://github.com/MichaReiser/llvm-node) to achieve the final IR generation.
+Tsll extracts information on Abstract Syntax Tree (AST) generated with [Typescript Compiler API](https://github.com/Microsoft/TypeScript/wiki/Using-the-Compiler-API) by visiting each node, and create instructions accordingly with [LLVM Typescript bindings](https://github.com/MichaReiser/llvm-node) to achieve the final IR generation.
 
-For more detail, go to [wiki pages](https://github.com/sbip-sg/typescriptllvm/wiki)
+For more detail, go to [wiki pages](https://github.com/sbip-sg/tsll/wiki)
 ## Install
 ```
-npm install @lungchen/typescriptllvm
+npm install tsll
 ```
 Note that in order to install this package from my private registry, you have to be a collaborator of mine on npm.
 ## Usage
-typescriptllvm can be run as a command as you normally would. Just type the following command to see more options on your favorite terminal.
+tsll can be run as a command as you normally would. Just type the following command to see more options on your favorite terminal.
 ```
-typescriptllvm -h
+tsll -h
 ```
 ## Development
 For those who would like to develop this project together, please check out below.
@@ -48,4 +48,4 @@ A list of resources regarding LLVM and Typescript Compiler API documentation is 
 - https://github.com/emlai/ts-llvm
 
 ## Disclaimer
-By using this project, you agree that we as developers of typescriptllvm have no legal obligations in any form to your usage.
+By using this project, you agree that we as SBIP developers of tsll have no legal obligations in any form to your usage.
