@@ -1,4 +1,5 @@
 [![Actions Status](https://github.com/sbip-sg/tsll/workflows/CI/badge.svg)](https://github.com/sbip-sg/tsll/actions)
+[![npm version](https://badge.fury.io/js/tsll.svg)](https://badge.fury.io/js/tsll)
 ## What is tsll?
 Tsll is a Typescript compiler frontend for LLVM IR generation. Our goal of this work is to verify blockchain smart contracts through the generated IR. Before we transpile Node.js code in Typescript into Javascript artifacts, tsll combined with other backend analysis tools could provide a powerful framework to search for vulnerabilities and security issues as smart contract developers would not realize while writing such smart contracts.
 
