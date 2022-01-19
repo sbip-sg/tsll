@@ -13,7 +13,7 @@ export class Debugger {
     private scopes: llvm.DIScope[];
 
     constructor(srcFile: ts.SourceFile, module: llvm.Module) {
-        this.builder = new llvm.DIBuilder(module, true, undefined);
+        this.builder = new llvm.DIBuilder(module, true);
         this.srcFile = srcFile;
         this.file = this.builder.createFile(`${this.srcFile.fileName}.dbg`, '.');
         // For now, lang number is randomly chosen.
@@ -27,24 +27,31 @@ export class Debugger {
         return this.srcFile.getLineAndCharacterOfPosition(pos);
     }
 
-    public buildFunctionDbgInfo(node: ts.Node) {
-        const location = this.getLocation(node);
+    public buildFunctionDbgInfo(functionLikeDeclaration: ts.FunctionLikeDeclaration, func: llvm.Function) {
+        const location = this.getLocation(functionLikeDeclaration);
+        const args = func.getArguments();
+        
+        
+        // for (const arg of args) {
+        //     elements.push(this.getType(arg.type));
+        // }
+        
         const elements = [this.getDoubleType()];
         const metadata = this.builder.getOrCreateTypeArray(elements);
         const subroutineType = this.builder.createSubroutineType(metadata);
-        const subprogram = this.builder.createFunction(this.compileUnit, node.getText(this.srcFile), '', this.file, location.line, subroutineType, location.line);
+        const subprogram = this.builder.createFunction(this.compileUnit, func.name, ' ', this.file, location.line, subroutineType, location.line);
         this.scopes.push(subprogram);
         return subprogram;
     }
 
-    public buildVariableDbgInfo(node: ts.Node, value: llvm.Value, diLocalScope: llvm.DILocalScope, currentBlock: llvm.BasicBlock) {
+    public buildVariableDbgInfo(node: ts.Node, value: llvm.Value, diScope: llvm.DIScope, currentBlock: llvm.BasicBlock) {
 
         const diExpression = this.builder.createExpression([]);
         const line = this.getLocation(node).line;
         const column = this.getLocation(node).character;
         const context = value.getContext();
-        const diLocalVar = this.builder.createAutoVariable(diLocalScope, value.name, this.file, line, this.getDoubleType());
-        const diLocation = llvm.DILocation.get(context, line, column, diLocalScope)
+        const diLocalVar = this.builder.createAutoVariable(diScope, value.name, this.file, line, this.getDoubleType());
+        const diLocation = llvm.DILocation.get(context, line, column, diScope as llvm.DILocalScope)
         this.builder.insertDeclare(value, diLocalVar, diExpression, diLocation, currentBlock);
     }
 
