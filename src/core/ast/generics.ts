@@ -88,13 +88,14 @@ export class Generics {
     public static constructWholeName(name: string, types: llvm.Type[]) {
         let wholeName = name;
         types.every(type => {
+            wholeName = wholeName.concat('_');
             // Resolve the type information from the pointer type
             if (type.isPointerTy()) type = type.elementType;
 
             if (type.isStructTy()) {
-                wholeName = wholeName.concat(`_${type.name}`);    
+                if (type.name !== undefined) wholeName = wholeName.concat(`${type.name}`);    
             } else {
-                wholeName = wholeName.concat(`_${type.toString()}`);
+                wholeName = wholeName.concat(`${type.toString()}`);
             }
         });
         return wholeName;
