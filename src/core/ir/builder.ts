@@ -1,4 +1,4 @@
-import llvm, { CallInst, ConstantInt, StructType } from '@lungchen/llvm-node';
+import llvm, { CallInst, ConstantInt, PointerType, StructType } from '@lungchen/llvm-node';
 import { FunctionUndefinedError, SyntaxNotSupportedError, TypeUndefinedError } from "../../common/error";
 import { Generics } from '../ast/generics';
 import { Type, Value, BasicBlock, isConstant } from "./types";
@@ -11,16 +11,19 @@ export class Builder {
     private loopEndBlock: llvm.BasicBlock | undefined;
     private loopNextBlock: llvm.BasicBlock | undefined;
     private lastStructType: llvm.StructType | undefined;
-    private structMap: Map<string, Array<string>>;
-    private typeAliasMap: Map<string, llvm.Type>;
+    private structMap: Map<string, llvm.StructType>;
+    private typeMap: Map<string, llvm.Type>;
+    private functionMap: Map<string, llvm.Function>;
+    private structElementNamesMap: Map<string, Array<string>>;
 
     constructor(moduleId: string) {
         this.llvmContext = new llvm.LLVMContext();
         this.llvmModule = new llvm.Module(moduleId, this.llvmContext);
         this.llvmBuilder = new llvm.IRBuilder(this.llvmContext);
         this.structMap = new Map();
-        this.typeAliasMap = new Map();
-        // includeBuiltinTypes(this.llvmModule);
+        this.structElementNamesMap = new Map();
+        this.typeMap = new Map();
+        this.functionMap = new Map();
     }
 
     public getModule() {
@@ -99,6 +102,22 @@ export class Builder {
         return llvm.Type.getInt8PtrTy(this.llvmContext);
     }
 
+    public buildOpaquePtrType(): PointerType {
+        return llvm.PointerType.get(this.llvmContext, 0);
+    }
+
+    public buildOpaqueType(): StructType {
+        return llvm.StructType.get(this.llvmContext, []);
+    }
+
+    public setFunction(name: string, func: llvm.Function) {
+        this.functionMap.set(name, func);
+    }
+
+    public hasFunction(name: string) {
+        return this.functionMap.has(name);
+    }
+
     public getIntrinsic(name: string) {
         // Make sure the name starts with the correct intrinsic prefix
         if (!name.startsWith('llvm.')) return undefined;
@@ -108,14 +127,14 @@ export class Builder {
     }
 
     public buildFunctionCall(name: string, parameters: Value[], defaultValues?: Map<string, Value>) {
-        let fn = this.llvmModule.getFunction(name);
+        let fn = this.getFunction(name);
         let intrinsicFn = this.getIntrinsic(name);
         if (fn === undefined) fn = intrinsicFn;
         if (fn === undefined) throw new FunctionUndefinedError();
 
         // The following checks if parameter types match argument types as defined for a function
         let args = fn.getArguments();
-        let anyType = this.buildAnyType();
+        // let anyType = this.buildAnyType();
         for (let i = 1; defaultValues !== undefined && i < args.length; i++) {
             if (i >= parameters.length) {
                 let defaultValue = defaultValues.get(args[i].name);
@@ -290,11 +309,15 @@ export class Builder {
         this.lastStructType = structType;
     }
 
-    public insertProperty(name: string, types: Type[], names: string[]) {
-        let structType = this.llvmModule.getTypeByName(name);
-        if (structType === null) throw new TypeUndefinedError();
+    public insertProperty(structType: StructType, types: Type[], names: string[]) {
         structType.setBody(types);
-        this.structMap.set(name, names);
+        
+        for (const name of names) {
+            this.structMap.set(`${structType.name}_${name}`, structType);
+            this.structElementNamesMap.set(`${structType.name}_${name}`, names);
+        }
+
+        this.structElementNamesMap.set(structType.name as string, names);
         this.lastStructType = structType;
     }
 
@@ -321,7 +344,7 @@ export class Builder {
     }
 
     public setType(name: string, type: llvm.Type) {
-        this.typeAliasMap.set(name, type);
+        this.typeMap.set(name, type);
     }
 
     /**
@@ -333,21 +356,24 @@ export class Builder {
         try {
             return this.getStructType(name);
         } catch (err) {
-            const type = this.typeAliasMap.get(name);
+            const type = this.typeMap.get(name);
             if (type === undefined) throw new TypeUndefinedError();
             return type;
         }
     }
 
-    public getElementNamesInStruct(structName: string) {
-        const names = this.structMap.get(structName);
+    public getElementNamesInStruct(structType: StructType) {
+        if (structType.name === undefined) throw new SyntaxNotSupportedError();
+        const names = this.structElementNamesMap.get(structType.name);
         if (names === undefined) throw new TypeUndefinedError();
         return names;
     }
 
-    public findIndexInStruct(structName: string, elementName: string) {
-        const indices = this.structMap.get(structName);
-        if (indices === undefined) throw new TypeUndefinedError();
+    public findIndexInStruct(structType: StructType, elementName: string) {
+        if (structType.name === undefined) structType = this.structMap.get(`Object_${elementName}`) as StructType;
+        if (structType.name === undefined) return -1;
+        const indices = this.structElementNamesMap.get(structType.name);
+        if (indices === undefined) return -1;
         return indices.indexOf(elementName);
     }
 
@@ -359,11 +385,10 @@ export class Builder {
         this.setCurrentBlock(functionBlock);
 
         const args = fn.getArguments();
-        let i = 0;
-        do {
+
+        for (let i = 0; i < paramNames.length; i++) {
             args[i].name = paramNames[i];
-            ++i;
-        } while (i < paramNames.length);
+        }
 
         return fn;
     }
@@ -372,11 +397,11 @@ export class Builder {
         const methodType = llvm.FunctionType.get(returnType, paramTypes, true);
         const fn = llvm.Function.create(methodType, llvm.LinkageTypes.ExternalLinkage, name, this.llvmModule);
         const args = fn.getArguments();
-        let i = 0;
-        do {
+
+        for (let i = 0; i < paramNames.length; i++) {
             args[i].name = paramNames[i];
-            ++i;
-        } while (i < paramNames.length);
+        }
+
         return fn;
     }
 
@@ -418,7 +443,17 @@ export class Builder {
     }
 
     public buildArrayType(type: Type, size: number) {
-        let arrayType = llvm.ArrayType.get(type, size);
+        if (type.isStructTy()) type = type;
+        // Build an array type with the element type
+        const arrayTypeName = `Array`;
+        if (this.hasStructType(arrayTypeName)) {
+            return this.getStructType(arrayTypeName);
+        }
+
+        const types = [this.buildNumberType(), llvm.ArrayType.get(type, size)];
+        const names = ['length', 'elements'];
+        const arrayType = this.buildStructType(arrayTypeName);
+        this.insertProperty(arrayType, types, names);
         return arrayType;
     }
 
@@ -456,14 +491,16 @@ export class Builder {
         return this.llvmBuilder.createResume(value);
     }
 
+    public buildInt8PtrType() {
+        return llvm.Type.getInt8PtrTy(this.llvmContext);
+    }
+
     public buildNullPtr() {
         return llvm.ConstantPointerNull.get(llvm.Type.getInt8PtrTy(this.llvmContext));
     }
 
     public getFunction(name: string) {
-        const fn = this.llvmModule.getFunction(name);
-        if (fn === undefined) throw new FunctionUndefinedError();
-        return fn;
+        return this.llvmModule.getFunction(name) || this.functionMap.get(name);
     }
 
     public convertIntegerToNumber(value: Value) {
@@ -481,4 +518,10 @@ export class Builder {
     public toBitcodeFile(filename: string) {
         llvm.writeBitcodeToFile(this.llvmModule, filename);
     }
+
+    private resolveTypeName(type: Type) {
+        if (type.isStructTy()) return type.name;
+        return type.toString();
+    }
+
 }
