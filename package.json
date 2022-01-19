@@ -11,7 +11,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sbip-sg/typescriptllvm.git"
+    "url": "git+https://github.com/sbip-sg/tsll.git"
   },
   "files": [
     "lib"
@@ -25,9 +25,9 @@
   "author": "SBIP (Singapore Blockchain Innovation Program)",
   "license": "Apache-2.0",
   "bugs": {
-    "url": "https://github.com/sbip-sg/typescriptllvm/issues"
+    "url": "https://github.com/sbip-sg/tsll/issues"
   },
-  "homepage": "https://github.com/sbip-sg/typescriptllvm#readme",
+  "homepage": "https://github.com/sbip-sg/tsll#readme",
   "engines": {
     "node": ">=14.17.3",
     "npm": ">=6.14.13"
@@ -40,7 +40,7 @@
   },
   "dependencies": {
     "@types/node": "^16.4.0",
-    "@lungchen/llvm-node": "^0.0.19",
+    "@lungchen/llvm-node": "^0.0.27",
     "yargs": "^17.0.1",
     "typescript": "^4.3.5"
   }

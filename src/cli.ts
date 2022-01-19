@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import yargs from 'yargs/yargs';
 import { convert } from './converter';
+import fs from 'fs';
 // Provide command line options
 const options = {
     'emitIR': {
@@ -23,7 +24,8 @@ const options = {
 const argv = yargs(process.argv.slice(2)).options(options).help().string('_').check(argv => {
     const filePaths = argv._;
     if (filePaths.length === 0) throw new Error('At least one file should be provided.');
-    return true;
+    const allExist = filePaths.every((filePath) => fs.existsSync(filePath as string));
+    return allExist;
 }).parseSync();
 // convert a list of input files to IR or Bitcode file
 convert(argv._ as string[], argv.emitIR, argv.emitBitcode);

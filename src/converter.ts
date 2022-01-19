@@ -1,6 +1,7 @@
 import ts from 'typescript';
 import { Visitor } from './core/ast/visitor';
 import { Builder } from './core/ir/builder';
+import { Debugger } from './core/ir/debugger';
 import { Scope } from './common/scope';
 
 export function convert(files: string[], emitIR: boolean, bitcodeOutput?: string) {
@@ -23,17 +24,18 @@ export function convert(files: string[], emitIR: boolean, bitcodeOutput?: string
 
     if (diagnostics.length > 0) return;
 
-    for (let file of files) {
-        let srcFile = program.getSourceFile(file);
+    for (const file of files) {
+        const srcFile = program.getSourceFile(file);
         if (srcFile === undefined) continue;
-        let names = file.trim().split('/');
-        let moduleId = names[names.length - 1];
-        let builder = new Builder(moduleId);
+        const names = file.trim().split('/');
+        const moduleId = names[names.length - 1];
+        const irBuilder = new Builder(moduleId);
+        const irDebugger = new Debugger(srcFile, irBuilder.getModule());
         let scope = new Scope(program);
-        let visitor = Visitor.getVisitor(builder);
+        let visitor = Visitor.getVisitor(irBuilder, irDebugger);
 
         visitor.visitSourceFile(srcFile, scope);
-        if (emitIR) builder.printIR();
-        if (bitcodeOutput !== undefined) builder.toBitcodeFile(bitcodeOutput);
+        if (emitIR) irBuilder.printIR();
+        if (bitcodeOutput !== undefined) irBuilder.toBitcodeFile(bitcodeOutput);
     }
 }

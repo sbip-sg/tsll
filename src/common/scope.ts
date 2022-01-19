@@ -8,10 +8,11 @@ export class Scope {
     private nameTable: Map<string, Value>;
     private tableArray: Map<string, Value>[];
     private defaultMap: Map<string, Map<string, Value>>;
-    private structMap: Map<string, Array<string>>;
     private nextType: Type | undefined;
     private program: ts.Program | undefined;
     private baseClassName: string | undefined;
+    private namespaceArray: string[];
+    private isMethod: boolean;
 
     constructor(program?: ts.Program) {
         this.program = program;
@@ -20,8 +21,18 @@ export class Scope {
         this.tableArray = [new Map()];
         this.nameTable = this.tableArray[this.tableArray.length - 1];
         this.defaultMap = new Map();
-        this.structMap = new Map();
+        this.namespaceArray = [];
+        this.isMethod = false;
     }
+
+    public setIsMethod(isMethod: boolean) {
+        this.isMethod = isMethod;
+    }
+
+    public checkMethod() {
+        return this.isMethod;
+    }
+
     /**
      * Return a function related to the current scope
      */
@@ -80,6 +91,24 @@ export class Scope {
     public getCurrentScopeName() {
         return this.scopeNameArray[this.scopeNameArray.length - 1];
     }
+
+    public getWholeNamespace() {
+        let wholeNamespace = '';
+        for (let i = 0; i < this.namespaceArray.length; i++) {
+            wholeNamespace = wholeNamespace + this.namespaceArray[i];
+            if (i < this.namespaceArray.length - 1) wholeNamespace = wholeNamespace + '_';
+        }
+        return wholeNamespace;
+    }
+    
+    public addNamespace(namespace: string) {
+        this.namespaceArray.push(namespace);
+    }
+
+    public removeNamespace() {
+        this.namespaceArray.pop();
+    }
+
     public setDefaultValues(name: string, defaultValues: Map<string, Value>) {
         this.defaultMap.set(name, defaultValues);
     }
@@ -112,7 +141,7 @@ export class Scope {
             let symbol = typeChecker.getSymbolAtLocation(node);
             // Get the original symbol with the alias if the members of the alias do not exist
             let aliasedSymbol: ts.Symbol | undefined;
-            if (symbol !== undefined && symbol.members === undefined && symbol.valueDeclaration === undefined) {
+            if (symbol !== undefined && symbol.flags === ts.SymbolFlags.Alias) {
                 aliasedSymbol = typeChecker.getAliasedSymbol(symbol);
             }
             if (aliasedSymbol !== undefined) symbol = aliasedSymbol;
