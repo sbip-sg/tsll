@@ -14,7 +14,8 @@
     "url": "git+https://github.com/sbip-sg/tsll.git"
   },
   "files": [
-    "lib"
+    "lib",
+    "ES2015"
   ],
   "keywords": [
     "LLVM",
