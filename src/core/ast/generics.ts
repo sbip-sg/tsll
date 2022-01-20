@@ -35,15 +35,15 @@ export class Generics {
         const name = this.visitor.visitIdentifier(typeName, scope);
         // Make sure that declared name does exist.
         const prevDeclaration = this.declarationMap.get(name);
-        const reDeclaration = scope.getDeclaration(typeName);
-        if (prevDeclaration === undefined && reDeclaration === undefined) throw new TypeUndefinedError();
+        const reDeclarations = scope.getDeclaration(typeName);
+        if (prevDeclaration === undefined && reDeclarations === undefined) throw new TypeUndefinedError();
         
         // Select one of the declarations which are the same
         let declaration: ts.Declaration;
         if (prevDeclaration !== undefined) {
             declaration = prevDeclaration;
-        } else if (reDeclaration !== undefined) {
-            declaration = reDeclaration;
+        } else if (reDeclarations !== undefined) {
+            declaration = reDeclarations[0];
         } else {
             throw new TypeUndefinedError();
         }

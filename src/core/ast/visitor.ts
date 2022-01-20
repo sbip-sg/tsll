@@ -1,7 +1,7 @@
 import ts from 'typescript';
 import { SyntaxNotSupportedError, InstantiateError, VariableUndefinedError, TypeUndefinedError, TypeMismatchError } from '../../common/error';
 import { Builder } from '../ir/builder';
-import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst, isFunction, isConstantInt, isPointerType } from '../ir/types';
+import { isBasicBlock, isGlobalVariable, isValue, Type, Value, isAllocaInst, isFunction, isConstantInt, isPointerType, isCallInst } from '../ir/types';
 import { Scope } from '../../common/scope';
 import { isString, FunctionLikeDeclaration, Property, isStringArray, isBreak, isContinue, Break, Continue } from '../../common/types';
 import llvm, { ArrayType, BasicBlock, CallInst, ConstantInt, DILocalScope, StructType } from '@lungchen/llvm-node';
@@ -43,7 +43,7 @@ export class Visitor {
             scope.enter('', entryFunction);
         }
 
-        for (let statement of sourceFile.statements) {
+        for (const statement of sourceFile.statements) {
             this.visitStatement(statement, scope);
         }
 
@@ -69,7 +69,7 @@ export class Visitor {
         // Retrieve identifier names
         let name = this.visitBindingName(variableDeclaration.name, scope);
         let type = this.visitTypeNode(variableDeclaration.type, scope);
-
+        if (type.isPointerTy()) type = type.elementType;
         this.builder.setType(name, type);
 
         /**
@@ -86,6 +86,11 @@ export class Visitor {
         // TODO: We could do type checking between visited type and declared type.
         if (isString(visited)) {
             let visitedValue = scope.get(visited);
+            if (visitedValue.type.isPointerTy()) {
+                this.builder.setType(name, visitedValue.type.elementType);
+            } else {
+                this.builder.setType(name, visitedValue.type);
+            }
             let newAlloca = this.builder.buildAlloca(visitedValue.type, undefined, name);
             this.builder.buildStore(visitedValue, newAlloca);
             scope.set(name, newAlloca);
@@ -97,12 +102,14 @@ export class Visitor {
 
         if (isFunction(visited)) {
             visited.name = name;
+            this.builder.setType(name, visited.type);
             scope.set(name, visited);
             return visited;
         }
 
         if (isAllocaInst(visited)) {
             // Rename the value
+            this.builder.setType(name, visited.type.elementType);
             visited.name = name;
             scope.set(name, visited);
             return visited;
@@ -112,6 +119,12 @@ export class Visitor {
             let moduleVal = this.builder.buildGlobalVariable(visited, name);
             scope.set(name, moduleVal);
             return moduleVal;
+        }
+
+        if (isCallInst(visited)) {
+            visited.name = name;
+            scope.set(name, visited);
+            return visited;
         }
 
         if (isValue(visited)) {
@@ -143,7 +156,8 @@ export class Visitor {
     }
 
     public visitArrayType(arrayTypeNode: ts.ArrayTypeNode, scope: Scope) {
-        return this.builder.buildOpaquePtrType();
+        const type = this.visitTypeNode(arrayTypeNode.elementType, scope) as Type;
+        return this.builder.buildPointerType(type);
     }
 
     public visitIfStatement(ifStatement: ts.IfStatement, scope: Scope) {
@@ -335,11 +349,18 @@ export class Visitor {
         /**
          * Identify if the callee is a method of class, interface, and whatnot
          */
-        const declaration = scope.getDeclaration(callExpression.expression);
-        if (declaration !== undefined) this.visitDeclaration(declaration, scope);
+        const declarations = scope.getDeclaration(callExpression.expression);
+        if (declarations !== undefined) scope.setIsMethod(true);
 
-        const name = this.visitExpression(callExpression.expression, scope);
+        let name = this.visitExpression(callExpression.expression, scope);
         if (!isString(name)) throw new SyntaxNotSupportedError();
+        // Assume async/await is being used.
+        if (name.includes('Promise')) name = name.replace('Promise_', '');
+        if (!this.builder.hasFunction(name) && declarations !== undefined) {
+            scope.enter(name.split('_')[0]);
+            declarations.every(declaration => this.visitDeclaration(declaration, scope));
+            scope.leave();
+        }
 
         scope.setIsMethod(false);
 
@@ -655,16 +676,16 @@ export class Visitor {
 
         const name = importClause.name;
         if (name !== undefined) {
-            const declaration = scope.getDeclaration(name);
-            if (declaration !== undefined) this.visitDeclaration(declaration, scope);
+            const declarations = scope.getDeclaration(name);
+            if (declarations !== undefined) declarations.every(declaration => this.visitDeclaration(declaration, scope));
         }
 
         const namedBindings = importClause.namedBindings;
         if (namedBindings !== undefined) {
             if (ts.isNamedImports(namedBindings)) {
                 for (const element of namedBindings.elements) {
-                    const declaration = scope.getDeclaration(element.name);
-                    if (declaration !== undefined) this.visitDeclaration(declaration, scope);
+                    const declarations = scope.getDeclaration(element.name);
+                    if (declarations !== undefined) declarations.every(declaration => this.visitDeclaration(declaration, scope));
                 }
             }
 
@@ -764,74 +785,74 @@ export class Visitor {
     }
 
     public visitMethodSignature(methodSignature: ts.MethodSignature, scope: Scope, specificTypes?: llvm.Type[]) {
-        scope.setIsMethod(true);
-        // let methodName = this.visitPropertyName(methodSignature.name, scope);
+
+        let methodName = this.visitPropertyName(methodSignature.name, scope);
         
-        // if (methodSignature.typeParameters !== undefined && specificTypes === undefined) {
-        //     Visitor.generics.saveDeclaration(methodName, methodSignature);
-        //     return;
-        // }
+        if (methodSignature.typeParameters !== undefined && specificTypes === undefined) {
+            Visitor.generics.saveDeclaration(methodName, methodSignature);
+            return;
+        }
 
-        // // Change the method name to be more specific
-        // if (specificTypes !== undefined) {
-        //     // Construct a whole name with the original name and each type's name
-        //     methodName = Generics.constructWholeName(methodName, specificTypes);
-        // }
+        // Change the method name to be more specific
+        if (specificTypes !== undefined) {
+            // Construct a whole name with the original name and each type's name
+            methodName = Generics.constructWholeName(methodName, specificTypes);
+        }
 
-        // // Build mappings of type parameters to specific types
-        // const typeParameterMap = new Map<string, llvm.Type>();
-        // const defaultTypeMap = new Map<string, llvm.Type>();
-        // if (methodSignature.typeParameters !== undefined && specificTypes !== undefined) {
-        //     const typeParameters = methodSignature.typeParameters;
-        //     for (let i = 0; i < typeParameters.length; i++) {
-        //         const typeParameterName = typeParameters[i].name.text;
-        //         const typeParameterDefault = typeParameters[i].default;
-        //         typeParameterMap.set(typeParameterName, specificTypes[i]);
-        //         if (typeParameterDefault !== undefined) {
-        //             const defaultType = this.visitTypeNode(typeParameterDefault, scope);
-        //             defaultTypeMap.set(typeParameterName, defaultType);
-        //         }
-        //     }
-        // }
+        // Build mappings of type parameters to specific types
+        const typeParameterMap = new Map<string, llvm.Type>();
+        const defaultTypeMap = new Map<string, llvm.Type>();
+        if (methodSignature.typeParameters !== undefined && specificTypes !== undefined) {
+            const typeParameters = methodSignature.typeParameters;
+            for (let i = 0; i < typeParameters.length; i++) {
+                const typeParameterName = typeParameters[i].name.text;
+                const typeParameterDefault = typeParameters[i].default;
+                typeParameterMap.set(typeParameterName, specificTypes[i]);
+                if (typeParameterDefault !== undefined) {
+                    const defaultType = this.visitTypeNode(typeParameterDefault, scope);
+                    defaultTypeMap.set(typeParameterName, defaultType);
+                }
+            }
+        }
 
-        // Visitor.generics.addTypeParameters(typeParameterMap);
-        // Visitor.generics.addDefaultTypes(defaultTypeMap);
+        Visitor.generics.addTypeParameters(typeParameterMap);
+        Visitor.generics.addDefaultTypes(defaultTypeMap);
 
-        // let returnType = this.visitTypeNode(methodSignature.type, scope);
-        // if (returnType.isPointerTy()) returnType = this.builder.buildPointerType(returnType);
-        // let className = scope.getCurrentScopeName();
-        // let parameterTypes: Type[] = [];
-        // let parameterNames: string[] = [];
-        // let defaultValues = new Map<string, Value>();
+        let returnType = this.visitTypeNode(methodSignature.type, scope);
+        if (returnType.isPointerTy()) returnType = this.builder.buildPointerType(returnType);
+        let className = scope.getCurrentScopeName();
+        let parameterTypes: Type[] = [];
+        let parameterNames: string[] = [];
+        let defaultValues = new Map<string, Value>();
 
-        // for (const parameter of methodSignature.parameters) {
+        for (const parameter of methodSignature.parameters) {
 
-        //     const parameterName = this.visitBindingName(parameter.name, scope);
-        //     parameterNames.push(parameterName);
+            const parameterName = this.visitBindingName(parameter.name, scope);
+            parameterNames.push(parameterName);
             
-        //     if (parameter.initializer !== undefined) {
-        //         let visited = this.visitExpression(parameter.initializer, scope);
-        //         let value = this.resolveNameDefinition(visited, scope);
-        //         defaultValues.set(parameterName, value);
-        //     }
+            if (parameter.initializer !== undefined) {
+                let visited = this.visitExpression(parameter.initializer, scope);
+                let value = this.resolveNameDefinition(visited, scope);
+                defaultValues.set(parameterName, value);
+            }
 
-        //     if (parameter.type === undefined) throw new SyntaxNotSupportedError();
-        //     let parameterType = this.visitTypeNode(parameter.type, scope);
-        //     parameterTypes.push(parameterType);
-        // }
+            if (parameter.type === undefined) throw new SyntaxNotSupportedError();
+            let parameterType = this.visitTypeNode(parameter.type, scope);
+            parameterTypes.push(parameterType);
+        }
 
-        // parameterNames.unshift('this');
-        // const structType = this.builder.getStructType(className);
-        // let ptrType = llvm.PointerType.get(structType, 0);
-        // parameterTypes.unshift(ptrType);
+        parameterNames.unshift('this');
+        const structType = this.builder.getStructType(className);
+        let ptrType = llvm.PointerType.get(structType, 0);
+        parameterTypes.unshift(ptrType);
 
-        // let fn = this.builder.buildFunctionDeclaration(`${className}_${methodName}`, returnType, parameterTypes, parameterNames);
+        let fn = this.builder.buildFunctionDeclaration(`${className}_${methodName}`, returnType, parameterTypes, parameterNames);
 
-        // Visitor.generics.removeTypeParameters();
-        // Visitor.generics.removeDefaultTypes();
+        Visitor.generics.removeTypeParameters();
+        Visitor.generics.removeDefaultTypes();
 
-        // this.builder.verifyFunction(fn);
-        // return fn;
+        this.builder.verifyFunction(fn);
+        return fn;
     }
 
     public visitTypeAliasDeclaration(typeAliasDeclaration: ts.TypeAliasDeclaration, scope: Scope, specificTypes?: llvm.Type[]) {
@@ -1022,9 +1043,9 @@ export class Visitor {
         const leftName = this.visitIdentifier(qualifiedName.left, scope);
         const rightName = this.visitIdentifier(qualifiedName.right, scope);
         
-        const declaration = scope.getDeclaration(qualifiedName);
-        if (declaration === undefined) throw new TypeUndefinedError();
-        this.visitDeclaration(declaration, scope);
+        const declarations = scope.getDeclaration(qualifiedName);
+        if (declarations === undefined) throw new TypeUndefinedError();
+        declarations.every(declaration => this.visitDeclaration(declaration, scope));
 
         const type = this.builder.getType(rightName);
         this.builder.setType(`${leftName}_${rightName}`, type);
@@ -1057,12 +1078,12 @@ export class Visitor {
                 try {
                     // if (type === undefined) type = this.builder.buildInt32Type();
                     // If the name cannot be found, then include the missing declaration of the type.
-                    const declaration = scope.getDeclaration(typeName);
-                    if (declaration === undefined) throw new SyntaxNotSupportedError();
+                    const declarations = scope.getDeclaration(typeName);
+                    if (declarations === undefined) throw new SyntaxNotSupportedError();
                     scope.enter(name);
-                    this.visitDeclaration(declaration, scope);
-                    type = this.builder.getType(name);
+                    declarations.every(declaration => this.visitDeclaration(declaration, scope));
                     scope.leave();
+                    type = this.builder.getType(name);
                 } catch (err) {
                     type = Visitor.generics.getTypeByName(name);
                     if (type === undefined) throw new TypeUndefinedError();
@@ -1319,14 +1340,16 @@ export class Visitor {
             if (!isString(visited)) throw new SyntaxNotSupportedError();
 
             if (!scope.has(visited)) {
-                const declaration = scope.getDeclaration(propertyAccessExpression.expression);
-                if (declaration === undefined) throw new TypeUndefinedError();
-                this.visitDeclaration(declaration, scope);
+                const declarations = scope.getDeclaration(propertyAccessExpression.expression);
+                if (declarations === undefined) throw new TypeUndefinedError();
+                declarations.every(declaration => this.visitDeclaration(declaration, scope));
             }
 
             let type = this.builder.getType(visited);
             if (type.isPointerTy()) type = type.elementType;
-            if (type.isStructTy()) return `${type.name}_${propertyAccessExpression.name.text}`;
+            if (type.isStructTy() && type.name !== undefined) {
+                return `${type.name}_${propertyAccessExpression.name.text}`;
+            }
             return `${type.toString()}_${propertyAccessExpression.name.text}`;
         }
 
@@ -1336,19 +1359,23 @@ export class Visitor {
         // If the identifier is not found in the current scope, it is possible that the identifier is not complete yet.
         if (isString(visited)) {
             if (!scope.has(visited)) {
-                const declaration = scope.getDeclaration(propertyAccessExpression.expression);
-                if (declaration === undefined) throw new TypeUndefinedError();
-                this.visitDeclaration(declaration, scope);
+                const declarations = scope.getDeclaration(propertyAccessExpression.expression);
+                if (declarations === undefined) throw new TypeUndefinedError();
+                declarations.every(declaration => this.visitDeclaration(declaration, scope));
+                return `${visited}_${propertyAccessExpression.name.text}`;
             }
-            if (!scope.has(visited)) return `${visited}_${propertyAccessExpression.name.text}`;
             visited = scope.get(visited);
             offset1 = this.builder.buildInteger(0, 32);
         }
 
+        visited = this.resolveVariableDefinition(visited, scope);
+
         let structType = this.resolveValueType(visited);
-
+        if (!structType.isStructTy()) {
+            structType = this.builder.getType(visited.name);
+            visited = this.builder.buildBitcast(visited, this.builder.buildPointerType(structType));
+        }
         if (!structType.isStructTy()) throw new SyntaxNotSupportedError();
-
         // Find the index of a specific name defined in the struct
         const idx = this.builder.findIndexInStruct(structType, propertyAccessExpression.name.text);
         // Cannot find an index, meaning that it could be a method name
@@ -1966,13 +1993,10 @@ export class Visitor {
         // In the current scope, initialize the parameter names of a function with the arguments received from a caller
         for (let i = 0; i < parameterNames.length; i++) {
             let arg = fn.getArguments()[i];
-            if (arg.type.isDoubleTy() || arg.type.isIntegerTy()) {
-                let newAlloca = this.builder.buildAlloca(arg.type);
-                this.builder.buildStore(arg, newAlloca);
-                scope.set(parameterNames[i], newAlloca);
-            } else {
-                scope.set(parameterNames[i], arg);
-            }
+            let newAlloca = this.builder.buildAlloca(arg.type);
+            this.builder.buildStore(arg, newAlloca);
+            scope.set(parameterNames[i], newAlloca);
+            this.builder.setType(parameterNames[i], arg.type);
         }
 
         // Use the function name appropriately modified by LLVM
@@ -2267,7 +2291,7 @@ export class Visitor {
             if (isAllocaInst(value)) return this.builder.buildLoad(value);
             if (isGlobalVariable(value) && value.initializer !== undefined) return value.initializer;
             return value;
-        } else if (isValue(visited) && isPointerType(visited.type)) {
+        } else if (isValue(visited) && isPointerType(visited.type) && isPointerType(visited.type.elementType)) {
             return this.builder.buildLoad(visited);
         } else if (isValue(visited)) {
             return visited;
@@ -2288,10 +2312,12 @@ export class Visitor {
     }
 
     private resolveValue(val: llvm.Value) {
+        let oldVal = val;
         while (isAllocaInst(val)) {
+            oldVal = val;
             val = this.builder.buildLoad(val);
         }
-        return val;
+        return oldVal;
     }
 }
 

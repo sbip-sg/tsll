@@ -145,7 +145,7 @@ export class Scope {
                 aliasedSymbol = typeChecker.getAliasedSymbol(symbol);
             }
             if (aliasedSymbol !== undefined) symbol = aliasedSymbol;
-            if (symbol !== undefined && symbol.declarations !== undefined) return symbol.declarations[0];
+            if (symbol !== undefined && symbol.declarations !== undefined) return [symbol.declarations[0]];
         }
         return undefined;
     }
