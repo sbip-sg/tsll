@@ -1,6 +1,6 @@
 {
   "name": "tsll",
-  "version": "1.0.0-alpha.6",
+  "version": "1.0.0-alpha.7",
   "description": "Compiler frontend for translating Typescript to LLVM IR",
   "main": "./lib/converter.js",
   "bin": "./lib/cli.js",
