@@ -24,7 +24,6 @@ Note that we use LLVM 13.0.0 to convert Typescript to LLVM Intermediate Represen
 ```
 npm install tsll
 ```
-Note that in order to install this package from my private registry, you have to be a collaborator of mine on npm.
 ## Usage
 tsll can be run as a command as you normally would. Just type the following command to see more options on your favorite terminal.
 ```
