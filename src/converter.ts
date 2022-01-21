@@ -36,6 +36,6 @@ export function convert(files: string[], emitIR: boolean, bitcodeOutput?: string
 
         visitor.visitSourceFile(srcFile, scope);
         if (emitIR) irBuilder.printIR();
-        if (bitcodeOutput !== undefined) irBuilder.toBitcodeFile(bitcodeOutput);
+        // if (bitcodeOutput !== undefined) irBuilder.toBitcodeFile(bitcodeOutput);
     }
 }
