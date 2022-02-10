@@ -1354,11 +1354,14 @@ export class Visitor {
 
         let visited = this.visitExpression(propertyAccessExpression.expression, scope);
 
+        // Due to the identical syntax of accessing method and property with dot notation,
+        // it differentiates them and behave differently.
         const isMethod = scope.checkMethod();
 
         if (isMethod) {
+            // It is now impossible to not have the visited as a string while looking at a method.
             if (!isString(visited)) throw new SyntaxNotSupportedError();
-
+            // Declare a type of the given visited when it does not exist
             if (!scope.has(visited)) {
                 const declarations = scope.getDeclaration(propertyAccessExpression.expression);
                 if (declarations === undefined) throw new TypeUndefinedError();
@@ -1373,6 +1376,7 @@ export class Visitor {
             return `${type.toString()}_${propertyAccessExpression.name.text}`;
         }
 
+        // If it detects non-method property access, it runs the following procedures instead.
         let offset1: llvm.Value | undefined;
 
         // visited could be either a pointer to a struct or a string identifier
@@ -1395,6 +1399,7 @@ export class Visitor {
             structType = this.builder.getType(visited.name);
             visited = this.builder.buildBitcast(visited, this.builder.buildPointerType(structType));
         }
+        // Impossible to access an element of non-struct type
         if (!structType.isStructTy()) throw new SyntaxNotSupportedError();
         // Find the index of a specific name defined in the struct
         const idx = this.builder.findIndexInStruct(structType, propertyAccessExpression.name.text);
@@ -1413,7 +1418,8 @@ export class Visitor {
         visited = scope.get(visited);
 
         const visitedType = this.resolveValueType(visited);
-
+        // Element access can be used only for arrays or objects
+        // According to these two possible accesses, their specific actions are different.
         if (visitedType.isStructTy() && visitedType.name?.startsWith('Array')) {
             const argumentExpression = elementAccessExpression.argumentExpression;
             let argument = this.visitExpression(argumentExpression, scope);
