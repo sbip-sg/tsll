@@ -1086,7 +1086,11 @@ export class Visitor {
     public resolveType(scope: Scope, typeName: ts.Identifier, typeArgs?: ts.NodeArray<ts.TypeNode>) {
         const name = this.visitIdentifier(typeName, scope);
         let type: Type | undefined;
+        // Type being resolved is of generics when typeArgs is not undefined.
         if (typeArgs === undefined) {
+            // Type being resolved could either be of an existing primitive or struct, or be saved previously with a reference name for generics.
+            // It first looks up the name in the builder and tries to declare the type with the name.
+            // Otherwise, the type will be retrieved from the generics name table.
             try {
                 type = this.builder.getType(name);
             } catch (err) {
@@ -1098,17 +1102,19 @@ export class Visitor {
                     scope.leave();
                     type = this.builder.getType(name);
                 } catch (err) {
+                    // If none of the above matches the need, the name of a type must be of a type reference (name) of generics
                     type = Visitor.generics.getTypeByName(name);
                     if (type === undefined) throw new TypeUndefinedError();
                 }
             }
         } else {
-            // TODO change typename to wholename
+            // Collect all the well-defined types
             const types = typeArgs.map(typeArg => this.visitTypeNode(typeArg, scope)) as Type[];
             if (scope === undefined) throw new SyntaxNotSupportedError();
             
             // Construct a whole name from typeName and types
             const wholeName = Generics.constructWholeName(name, types);
+            // Make sure that it does not build the same generic declaration again.
             if (Visitor.generics.hasDeclared(wholeName)) {
                 type = this.builder.getStructType(wholeName);
             } else {
@@ -1128,6 +1134,7 @@ export class Visitor {
         if (!isString(name)) throw new TypeMismatchError();
 
         let structType: StructType | undefined;
+        // Instantiate a generic type when typeArguments is not undefined. Otherwise, find the existing name.
         const typeArguments = newExpression.typeArguments;
         if (typeArguments !== undefined) {
             const types = typeArguments.map(typeArgument => this.visitTypeNode(typeArgument, scope)) as Type[];
@@ -2295,12 +2302,24 @@ export class Visitor {
         scope.leave();
     }
 
+    /**
+     * It resolves the given variable to a Value of LLVM IR in terms of the current scope.
+     * @param visited 
+     * @param scope 
+     * @returns 
+     */
     private resolveNameDefinition(visited: Value | string, scope: Scope) {
         if (isString(visited) && scope.has(visited)) return scope.get(visited);
         if (isValue(visited)) return visited;
         throw new VariableUndefinedError();
     }
 
+    /**
+     * It resolves the given variable to a target Value of LLVM IR in terms of the current scope and type of the target Value.
+     * @param visited 
+     * @param scope 
+     * @returns 
+     */
     private resolveVariableDefinition(visited: Value | string, scope: Scope) {
         if (isString(visited) && scope.has(visited)) {
             let value = scope.get(visited);
@@ -2316,6 +2335,11 @@ export class Visitor {
         }
     }
 
+    /**
+     * It resolves the type of the given Value to a primitive type or struct type of LLVM IR.
+     * @param val 
+     * @returns 
+     */
     private resolveValueType(val: llvm.Value) {
         let type = val.type;
         while (type.isPointerTy()) type = type.elementType;
