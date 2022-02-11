@@ -1594,6 +1594,8 @@ export class Visitor {
             types.push(type);
         }
 
+        // Merge all the struct types with their elements types into a new struct type
+        // typeSet is used to temporarily hold disinct element types and make sure that the same type does not appear twice
         const typeSet = new Set<llvm.Type>();
 
         for (const type of types) {
@@ -1625,6 +1627,7 @@ export class Visitor {
             case ts.SyntaxKind.VoidKeyword:
                 return this.builder.buildVoidType();
             case ts.SyntaxKind.StringKeyword:
+                // TODO: remove the size number
                 return this.builder.buildStringType(2);
             case ts.SyntaxKind.BooleanKeyword:
                 return this.builder.buildBooleanType();
@@ -1774,6 +1777,8 @@ export class Visitor {
             }
         }
 
+        // Set the mappings of type parameter to (default) type under the current class declaration
+        // so that it can look up the type with a type parameter name when visiting the other parts of the declaration. 
         Visitor.generics.addTypeParameters(typeParameterMap);
         Visitor.generics.addDefaultTypes(defaultTypeMap);
 
@@ -1838,6 +1843,7 @@ export class Visitor {
 
         scope.leave();
 
+        // Remove the mappings of type parameter to (default) type since the upper level of the Visitor functions does not have the same visibility as now.
         Visitor.generics.removeTypeParameters();
         Visitor.generics.removeDefaultTypes();
 
@@ -2034,6 +2040,7 @@ export class Visitor {
         scope.enter('Constructor', fn);
 
         if (constructorDeclaration.body !== undefined) this.visitBlock(constructorDeclaration.body, scope);
+        // Constructors should not return any values.
         this.builder.buildReturn()
         this.builder.verifyFunction(fn);
 
