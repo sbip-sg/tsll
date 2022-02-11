@@ -18,19 +18,41 @@ export class Generics {
         this.declaredNames = new Set();
     }
 
+    /**
+     * Find out if a declaration exists.
+     * @param name Name of the declaration
+     * @returns 
+     */
     public hasDeclaration(name: string) {
         const declaration = this.declarationMap.get(name);
         return declaration !== undefined; 
     }
 
+    /**
+     * Check if a type name is well-defined.
+     * @param name Name of type
+     * @returns 
+     */
     public hasDeclared(name: string) {
         return this.declaredNames.has(name);
     }
 
+    /**
+     * Save a declaration with its name.
+     * @param name Name of the declaration
+     * @param declaration 
+     */
     public saveDeclaration(name: string, declaration: ts.Declaration) {
         this.declarationMap.set(name, declaration);
     }
 
+    /**
+     * Visit a declaration previously saved in a pool of generics with well-defined type parameters.
+     * @param typeName Name of the declaration
+     * @param types Well-defined types
+     * @param scope Current scope
+     * @returns 
+     */
     public createSpecificDeclaration(typeName: ts.Identifier, types: llvm.Type[], scope: Scope) {
         const name = this.visitor.visitIdentifier(typeName, scope);
         // Make sure that declared name does exist.
@@ -55,22 +77,41 @@ export class Generics {
         return structType;
     }
 
+    /**
+     * Add a map of type parameters to well-defined types.
+     * @param typeParameterMap 
+     */
     public addTypeParameters(typeParameterMap: Map<string, llvm.Type>) {
         this.typeParameterMaps.push(typeParameterMap);
     }
 
+    /**
+     * Add a map of type parameters to default well-defined types.
+     * @param defaultTypeMap 
+     */
     public addDefaultTypes(defaultTypeMap: Map<string, llvm.Type>) {
         this.defaultTypeMaps.push(defaultTypeMap);
     }
 
+    /**
+     * Remove a map of type parameters to well-defined types.
+     */
     public removeTypeParameters() {
         this.typeParameterMaps.pop();
     }
 
+    /**
+     * Remove a map of type parameters to default well-defined types.
+     */
     public removeDefaultTypes() {
         this.defaultTypeMaps.pop();
     }
 
+    /**
+     * Find the well-defined type of a type name
+     * @param name Name of type parameter
+     * @returns 
+     */
     public getTypeByName(name: string) {
 
         if (this.typeParameterMaps.length > 0) {
@@ -85,6 +126,12 @@ export class Generics {
         return undefined;
     }
 
+    /**
+     * Produce a whole type name with the name of a declaration and the names of well-defined types.
+     * @param name Name of declaration
+     * @param types Well-defined types
+     * @returns 
+     */
     public static constructWholeName(name: string, types: llvm.Type[]) {
         let wholeName = name;
         types.every(type => {

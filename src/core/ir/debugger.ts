@@ -21,7 +21,12 @@ export class Debugger {
         // The root scope is of DICompileUnit.
         this.scopes = [this.compileUnit];
     }
-
+    
+    /**
+     * Find the location of a node in Typescript source code
+     * @param node 
+     * @returns 
+     */
     public getLocation(node: ts.Node) {
         const pos = node.getStart(this.srcFile);
         return this.srcFile.getLineAndCharacterOfPosition(pos);
