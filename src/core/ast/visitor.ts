@@ -48,8 +48,6 @@ export class Visitor {
         let entryFunctionName = 'main';
         if (!scope.has(entryFunctionName)) {
             let entryFunction = this.builder.buildFunction(entryFunctionName, this.builder.buildVoidType(), [], []);
-            // const diSubprogram = this.debugger.buildFunctionDbgInfo(sourceFile, entryFunction);
-            // entryFunction.setSubprogram(diSubprogram);
             scope.set(entryFunction.name, entryFunction);
             scope.enter('', entryFunction);
         }
@@ -269,7 +267,8 @@ export class Visitor {
 
     public visitFunctionDeclaration(functionDeclaration: ts.FunctionDeclaration, scope: Scope) {
         const fn = this.visitFunctionLikeDeclaration(functionDeclaration, scope);
-        // this.debugger.buildFunctionDbgInfo(function, )
+        const diSubprogram = this.debugger.buildFunctionDbgInfo(functionDeclaration, fn);
+        fn.setSubprogram(diSubprogram);
         scope.set(fn.name, fn);
     }
 
