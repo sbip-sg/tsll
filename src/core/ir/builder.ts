@@ -115,7 +115,7 @@ export class Builder {
     }
 
     public hasFunction(name: string) {
-        return this.functionMap.has(name);
+        return this.llvmModule.getFunction(name) !== undefined || this.functionMap.has(name);
     }
 
     public getIntrinsic(name: string) {
