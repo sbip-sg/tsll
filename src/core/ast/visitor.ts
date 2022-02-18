@@ -50,6 +50,8 @@ export class Visitor {
             let entryFunction = this.builder.buildFunction(entryFunctionName, this.builder.buildVoidType(), [], []);
             scope.set(entryFunction.name, entryFunction);
             scope.enter('', entryFunction);
+            const subprogram = this.debugger.buildFunctionDbgInfo(entryFunction);
+            entryFunction.setSubprogram(subprogram);
         }
 
         for (const statement of sourceFile.statements) {
@@ -57,6 +59,8 @@ export class Visitor {
         }
 
         this.builder.buildReturn();
+        this.debugger.leaveCurrentDIScope();
+        this.debugger.finalizeDI();
         this.builder.verifyModule();
     }
 
@@ -107,7 +111,7 @@ export class Visitor {
             scope.set(name, newAlloca);
             const currentBlock = this.builder.getCurrentBlock();
             const diLocalScope = this.debugger.getCurrentDIScope();
-            // this.debugger.buildVariableDbgInfo(variableDeclaration, newAlloca, diLocalScope, currentBlock);
+            this.debugger.buildVariableDbgInfo(variableDeclaration, newAlloca, diLocalScope, currentBlock);
             return newAlloca;
         }
 
@@ -122,6 +126,9 @@ export class Visitor {
             // Rename the value
             this.builder.setType(name, visited.type.elementType);
             visited.name = name;
+            const currentBlock = this.builder.getCurrentBlock();
+            const diLocalScope = this.debugger.getCurrentDIScope();
+            this.debugger.buildVariableDbgInfo(variableDeclaration, visited, diLocalScope, currentBlock);
             scope.set(name, visited);
             return visited;
         }
@@ -134,13 +141,20 @@ export class Visitor {
 
         if (isCallInst(visited)) {
             visited.name = name;
+            const currentBlock = this.builder.getCurrentBlock();
+            const diLocalScope = this.debugger.getCurrentDIScope();
+            this.debugger.buildVariableDbgInfo(variableDeclaration, visited, diLocalScope, currentBlock);
             scope.set(name, visited);
             return visited;
         }
 
         if (isValue(visited)) {
             let newAlloca = this.builder.buildAlloca(visited.type, undefined, name);
-            scope.set(name, newAlloca);
+            visited.name = name;
+            const currentBlock = this.builder.getCurrentBlock();
+            const diLocalScope = this.debugger.getCurrentDIScope();
+            this.debugger.buildVariableDbgInfo(variableDeclaration, visited, diLocalScope, currentBlock);
+            scope.set(name, visited);
             return visited;
         }
 
@@ -267,8 +281,6 @@ export class Visitor {
 
     public visitFunctionDeclaration(functionDeclaration: ts.FunctionDeclaration, scope: Scope) {
         const fn = this.visitFunctionLikeDeclaration(functionDeclaration, scope);
-        const diSubprogram = this.debugger.buildFunctionDbgInfo(functionDeclaration, fn);
-        fn.setSubprogram(diSubprogram);
         scope.set(fn.name, fn);
     }
 
@@ -305,6 +317,8 @@ export class Visitor {
         scope.setDefaultValues(`${currentScopeName}${functionName}`, defaultValues);
 
         const fn = this.builder.buildFunction(`${functionName}`, returnType, parameterTypes, parameterNames);
+        const diSubprogram = this.debugger.buildFunctionDbgInfo(fn, functionLikeDeclaration);
+        fn.setSubprogram(diSubprogram);
         scope.enter(functionName, fn);
 
         let modifierIdx = 0;
@@ -341,10 +355,12 @@ export class Visitor {
             this.builder.buildReturn(returnValue);
         }
 
-        this.builder.verifyFunction(fn);
-
         // Return to the last scope
         scope.leave(fn);
+        this.debugger.leaveCurrentDIScope();
+
+        this.debugger.finalizeSubprogram(diSubprogram);
+        this.builder.verifyFunction(fn);
 
         const entryBlock = lastFunction.getEntryBlock();
         if (!isBasicBlock(entryBlock)) throw new SyntaxNotSupportedError();
@@ -632,7 +648,10 @@ export class Visitor {
                     parameterTypes.push(parameterType);
                 }
 
-                this.builder.buildFunctionDeclaration(`${interfaceName}_${propertyName}`, returnType, parameterTypes, parameterNames);
+                const fn = this.builder.buildFunctionDeclaration(`${interfaceName}_${propertyName}`, returnType, parameterTypes, parameterNames);
+                const diSubprogram = this.debugger.buildFunctionDbgInfo(fn, member);
+                fn.setSubprogram(diSubprogram);
+                this.debugger.leaveCurrentDIScope();
             }
 
             if (ts.isPropertySignature(member)) {
@@ -861,6 +880,9 @@ export class Visitor {
         parameterTypes.unshift(ptrType);
 
         let fn = this.builder.buildFunctionDeclaration(`${className}_${methodName}`, returnType, parameterTypes, parameterNames);
+        const diSubprogram = this.debugger.buildFunctionDbgInfo(fn, methodSignature);
+        fn.setSubprogram(diSubprogram);
+        this.debugger.leaveCurrentDIScope();
 
         Visitor.generics.removeTypeParameters();
         Visitor.generics.removeDefaultTypes();
@@ -1803,6 +1825,8 @@ export class Visitor {
 
         scope.enter(className);
 
+        this.debugger.buildClassDbgInfo(classDeclaration, structType);
+
         // Construct the information about each class property
         let properties: Property[] = [];
         let propertyTypes: llvm.Type[] = [];
@@ -1934,9 +1958,10 @@ export class Visitor {
         parameterTypes.unshift(ptrType);
 
         let fn: llvm.Function;
+        let diSubprogram: llvm.DISubprogram;
         if (methodDeclaration.body !== undefined) {
             fn = this.builder.buildClassMethod(`${className}_${methodName}`, returnType, parameterTypes, parameterNames);
-            
+            diSubprogram = this.debugger.buildFunctionDbgInfo(fn, methodDeclaration);
             // Use the function name appropriately modified by LLVM
             scope.setDefaultValues(fn.name, defaultValues);
             // Change to a new scope
@@ -1991,8 +2016,11 @@ export class Visitor {
 
         } else {
             fn = this.builder.buildFunctionDeclaration(`${className}_${methodName}`, returnType, parameterTypes, parameterNames);
+            diSubprogram = this.debugger.buildFunctionDbgInfo(fn, methodDeclaration);
         }
 
+        fn.setSubprogram(diSubprogram);
+        this.debugger.leaveCurrentDIScope();
         this.builder.verifyFunction(fn);
         return fn;
     }
@@ -2032,7 +2060,8 @@ export class Visitor {
             scope.set(parameterNames[i], newAlloca);
             this.builder.setType(parameterNames[i], arg.type);
         }
-
+        const diSubprogram = this.debugger.buildFunctionDbgInfo(fn, constructorDeclaration);
+        fn.setSubprogram(diSubprogram);
         // Use the function name appropriately modified by LLVM
         scope.setDefaultValues(`${className}_Constructor`, defaultValues);
         // Change to a new scope
@@ -2042,7 +2071,7 @@ export class Visitor {
         // Constructors should not return any values.
         this.builder.buildReturn()
         this.builder.verifyFunction(fn);
-
+        this.debugger.leaveCurrentDIScope();
         // Return to the last scope
         scope.leave(fn);
         let currentFunction = scope.getCurrentFunction();
