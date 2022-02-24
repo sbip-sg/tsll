@@ -30,7 +30,7 @@ export function convert(files: string[], emitIR: boolean, bitcodeOutput?: string
         const names = file.trim().split('/');
         const moduleId = names[names.length - 1];
         const irBuilder = new Builder(moduleId);
-        const irDebugger = new Debugger(srcFile, irBuilder.getModule());
+        const irDebugger = new Debugger(srcFile, irBuilder);
         let scope = new Scope(program);
         let visitor = Visitor.getVisitor(irBuilder, irDebugger);
 

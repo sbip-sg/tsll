@@ -13,6 +13,7 @@ export class Scope {
     private baseClassName: string | undefined;
     private namespaceArray: string[];
     private isMethod: boolean;
+    private isThis: boolean;
 
     constructor(program?: ts.Program) {
         this.program = program;
@@ -23,6 +24,7 @@ export class Scope {
         this.defaultMap = new Map();
         this.namespaceArray = [];
         this.isMethod = false;
+        this.isThis = false;
     }
 
     public setIsMethod(isMethod: boolean) {
@@ -31,6 +33,14 @@ export class Scope {
 
     public checkMethod() {
         return this.isMethod;
+    }
+
+    public setIsThis(isThis: boolean) {
+        this.isThis = isThis;
+    }
+
+    public checkThis() {
+        return this.isThis;
     }
 
     /**
