@@ -51,17 +51,18 @@ export class Visitor {
             scope.set(entryFunction.name, entryFunction);
             scope.enter('', entryFunction);
             const subprogram = this.debugger.buildFunctionDbgInfo(entryFunction);
+
+            for (const statement of sourceFile.statements) {
+                this.visitStatement(statement, scope);
+            }
+    
+            this.builder.buildReturn();
+            this.debugger.leaveCurrentDIScope();
+            this.debugger.finalizeSubprogram(subprogram);
             entryFunction.setSubprogram(subprogram);
+            this.debugger.finalizeDI();
+            this.builder.verifyModule();
         }
-
-        for (const statement of sourceFile.statements) {
-            this.visitStatement(statement, scope);
-        }
-
-        this.builder.buildReturn();
-        this.debugger.leaveCurrentDIScope();
-        this.debugger.finalizeDI();
-        this.builder.verifyModule();
     }
 
     public visitVariableStatement(variableStatement: ts.VariableStatement, scope: Scope) {
@@ -150,11 +151,11 @@ export class Visitor {
 
         if (isValue(visited)) {
             let newAlloca = this.builder.buildAlloca(visited.type, undefined, name);
-            visited.name = name;
+            this.builder.buildStore(visited, newAlloca);
             const currentBlock = this.builder.getCurrentBlock();
             const diLocalScope = this.debugger.getCurrentDIScope();
-            this.debugger.buildVariableDbgInfo(variableDeclaration, visited, diLocalScope, currentBlock);
-            scope.set(name, visited);
+            this.debugger.buildVariableDbgInfo(variableDeclaration, newAlloca, diLocalScope, currentBlock);
+            scope.set(name, newAlloca);
             return visited;
         }
 
@@ -175,15 +176,14 @@ export class Visitor {
             }
         }
 
-        const structType = this.builder.buildStructType('');
-
+        const structType = this.builder.buildStructType(largestType.toString());
         structType.setBody([largestType]);
         return structType;
     }
 
     public visitArrayType(arrayTypeNode: ts.ArrayTypeNode, scope: Scope) {
         const type = this.visitTypeNode(arrayTypeNode.elementType, scope) as Type;
-        return this.builder.buildPointerType(type);
+        return type;
     }
 
     public visitIfStatement(ifStatement: ts.IfStatement, scope: Scope) {
@@ -317,8 +317,6 @@ export class Visitor {
         scope.setDefaultValues(`${currentScopeName}${functionName}`, defaultValues);
 
         const fn = this.builder.buildFunction(`${functionName}`, returnType, parameterTypes, parameterNames);
-        const diSubprogram = this.debugger.buildFunctionDbgInfo(fn, functionLikeDeclaration);
-        fn.setSubprogram(diSubprogram);
         scope.enter(functionName, fn);
 
         let modifierIdx = 0;
@@ -340,12 +338,16 @@ export class Visitor {
         // For future reference
         if (coroHandler !== undefined) scope.set('coro.handler', coroHandler);
 
+        let allocas: llvm.AllocaInst[] = [];
         // In the current scope, initialize the parameter names of a function with the arguments received from a caller
         for (let i = 0; i < parameterNames.length; i++) {
             let newAlloca = this.builder.buildAlloca(parameterTypes[i]);
             this.builder.buildStore(fn.getArguments()[i], newAlloca);
             scope.set(parameterNames[i], newAlloca);
+            allocas.push(newAlloca);
         }
+
+        const diSubprogram = this.debugger.buildFunctionDbgInfo(fn, allocas, functionLikeDeclaration);
 
         let returnValue: Value | Break | Continue | undefined;
         if (functionLikeDeclaration.body !== undefined) returnValue = this.visitBlock(functionLikeDeclaration.body, scope);
@@ -360,6 +362,7 @@ export class Visitor {
         this.debugger.leaveCurrentDIScope();
 
         this.debugger.finalizeSubprogram(diSubprogram);
+        fn.setSubprogram(diSubprogram);
         this.builder.verifyFunction(fn);
 
         const entryBlock = lastFunction.getEntryBlock();
@@ -397,7 +400,7 @@ export class Visitor {
         let types: llvm.Type[] = [];
         for (let argument of callExpression.arguments) {
             let visited = this.visitExpression(argument, scope);
-            let value = this.resolveNameDefinition(visited, scope);
+            let value = this.resolveVariableDefinition(visited, scope);
             values.push(value);
             types.push(value.type)
         }
@@ -413,7 +416,13 @@ export class Visitor {
                 thisValue = this.builder.buildBitcast(thisValue, baseStructPtrType);
                 scope.resetBaseClassName();
             }
-            values.unshift(thisValue);
+            if (scope.checkThis()) {
+                values.unshift(thisValue);
+                scope.setIsThis(false);
+            } else {
+                let structValue = scope.get(name);
+                values.unshift(structValue);
+            }
             defaultValues = scope.getDefaultValues(name);
         } catch (err) {
             // err msg here is not important
@@ -470,15 +479,18 @@ export class Visitor {
                 const callExpression = statement.expression;
                 const name = this.visitExpression(callExpression.expression, scope);
                 if (!isString(name)) throw new SyntaxNotSupportedError();
-                const fn = this.builder.getFunction(name);
-                if (fn === undefined) throw new TypeUndefinedError();
-                let args: Value[] = [];
 
+                let args: Value[] = [];
+                let argTypes: llvm.Type[] = [];
                 for (const argument of callExpression.arguments) {
                     const visited = this.visitExpression(argument, scope);
                     const arg = this.resolveNameDefinition(visited, scope);
                     args.push(arg);
+                    argTypes.push(arg.type);
                 }
+
+                const fn = this.builder.getFunction(name);
+                if (fn === undefined) throw new TypeUndefinedError();
 
                 if (normalDest !== undefined) this.builder.buildBranch(finalDest);
 
@@ -596,6 +608,8 @@ export class Visitor {
         const aliasName = scope.getCurrentScopeName();
         this.builder.setType(aliasName, structType);
 
+        this.debugger.buildStructDbgInfo(interfaceDeclaration, structType);
+
         // Build mappings of type parameters to specific types
         const typeParameterMap = new Map<string, llvm.Type>();
         const defaultTypeMap = new Map<string, llvm.Type>();
@@ -648,10 +662,20 @@ export class Visitor {
                     parameterTypes.push(parameterType);
                 }
 
+                /* 
+                * Insert a pointer to IR struct type generated with interface declaration
+                * for future access to the elements of the struct type in this method declaration
+                */
+                parameterNames.unshift('this');
+                const structType = this.builder.getStructType(interfaceName);
+                let ptrType = llvm.PointerType.get(structType, 0);
+                parameterTypes.unshift(ptrType);
+
                 const fn = this.builder.buildFunctionDeclaration(`${interfaceName}_${propertyName}`, returnType, parameterTypes, parameterNames);
-                const diSubprogram = this.debugger.buildFunctionDbgInfo(fn, member);
-                fn.setSubprogram(diSubprogram);
+                const diSubprogram = this.debugger.buildFunctionDbgInfo(fn, undefined, member);
                 this.debugger.leaveCurrentDIScope();
+                this.debugger.finalizeSubprogram(diSubprogram);
+                fn.setSubprogram(diSubprogram);
             }
 
             if (ts.isPropertySignature(member)) {
@@ -880,13 +904,14 @@ export class Visitor {
         parameterTypes.unshift(ptrType);
 
         let fn = this.builder.buildFunctionDeclaration(`${className}_${methodName}`, returnType, parameterTypes, parameterNames);
-        const diSubprogram = this.debugger.buildFunctionDbgInfo(fn, methodSignature);
-        fn.setSubprogram(diSubprogram);
+        const diSubprogram = this.debugger.buildFunctionDbgInfo(fn, undefined, methodSignature);
         this.debugger.leaveCurrentDIScope();
 
         Visitor.generics.removeTypeParameters();
         Visitor.generics.removeDefaultTypes();
 
+        this.debugger.finalizeSubprogram(diSubprogram);
+        fn.setSubprogram(diSubprogram);
         this.builder.verifyFunction(fn);
         return fn;
     }
@@ -930,11 +955,13 @@ export class Visitor {
         const typeNode = typeAliasDeclaration.type;
         let type: llvm.StructType;
         if (ts.isIndexedAccessTypeNode(typeNode)) {
-            this.builder.buildStructType(typeAliasName);
+            const structType = this.builder.buildStructType(typeAliasName);
+            this.debugger.buildStructDbgInfo(typeAliasDeclaration, structType);
             this.visitTypeNode(typeNode, scope);
             type = this.builder.getStructType(typeAliasName);
         } else {
             const structType = this.builder.buildStructType(typeAliasName);
+            this.debugger.buildStructDbgInfo(typeAliasDeclaration, structType);
             type = this.visitTypeNode(typeNode, scope) as llvm.StructType;
             structType.setBody([type]);
             // Build a relationiship between the name and the type
@@ -1013,7 +1040,7 @@ export class Visitor {
         const arrayLen = arrayLiteralExpression.elements.length;
         const arrayType = this.builder.buildArrayType(this.builder.buildOpaqueType(), arrayLen);
         const arrayAlloca = this.builder.buildAlloca(arrayType);
-
+        // this.debugger.buildStructDbgInfo(arrayLiteralExpression, arrayType);
         /**
          * Insert property 'length' of the array
          */
@@ -1248,7 +1275,7 @@ export class Visitor {
         //     this.builder.buildStore(key, keyPtr);
         //     this.builder.buildStore(valueArray[i], valuePtr);
         // }
-
+        this.debugger.buildStructDbgInfo(objectLiteralExpression, objectStructType);
         return objectStructAlloca;
     }
 
@@ -1378,7 +1405,7 @@ export class Visitor {
         // Due to the identical syntax of accessing method and property with dot notation,
         // it differentiates them and behave differently.
         const isMethod = scope.checkMethod();
-
+        if (visited === 'this') scope.setIsThis(true);
         if (isMethod) {
             // It is now impossible to not have the visited as a string while looking at a method.
             if (!isString(visited)) throw new SyntaxNotSupportedError();
@@ -1387,12 +1414,28 @@ export class Visitor {
                 const declarations = scope.getDeclaration(propertyAccessExpression.expression);
                 if (declarations === undefined) throw new TypeUndefinedError();
                 declarations.every(declaration => this.visitDeclaration(declaration, scope));
+                const type = this.builder.getType(visited);
+                const alloca = this.builder.buildAlloca(type, undefined, visited);
+                scope.set(visited, alloca);
             }
 
             let type = this.builder.getType(visited);
+            visited = scope.get(visited);
+            visited = this.resolveVariableDefinition(visited, scope);
+
             if (type.isPointerTy()) type = type.elementType;
             if (type.isStructTy() && type.name !== undefined) {
-                return `${type.name}_${propertyAccessExpression.name.text}`;
+                const accessName = `${type.name}_${propertyAccessExpression.name.text}`;
+                const idx = this.builder.findIndexInStruct(type, propertyAccessExpression.name.text);
+                if (idx !== -1) {
+                    const offset1 = this.builder.buildInteger(0, 32);
+                    const offset2 = this.builder.buildInteger(idx, 32);
+                    const ptr = this.builder.buildAccessPtr(visited, offset1, offset2);
+                    scope.set(accessName, ptr);
+                } else {
+                    scope.set(accessName, visited);
+                }
+                return accessName;
             }
             return `${type.toString()}_${propertyAccessExpression.name.text}`;
         }
@@ -1443,7 +1486,12 @@ export class Visitor {
         // According to these two possible accesses, their specific actions are different.
         if (visitedType.isStructTy() && visitedType.name?.startsWith('Array')) {
             const argumentExpression = elementAccessExpression.argumentExpression;
-            let argument = this.visitExpression(argumentExpression, scope);
+            let argument: string | Value;
+            if (ts.isStringLiteral(argumentExpression) || ts.isNumericLiteral(argumentExpression)) {
+                argument = argumentExpression.text;
+            } else {
+                argument = this.visitExpression(argumentExpression, scope);
+            }
             
             if (isString(argument) && argument !== 'i') {
                 const idx = parseInt(argument);
@@ -1530,7 +1578,7 @@ export class Visitor {
             // Find the largest size of element type
             let numBits = 0;
             let largestType: llvm.Type = types[0];
-            for (const type of types) {
+            for (let type of types) {
                 const newNumBits = type.getPrimitiveSizeInBits();
                 if (newNumBits > numBits) {
                     numBits = newNumBits;
@@ -1538,6 +1586,7 @@ export class Visitor {
                 }
             }
             const structType = this.builder.getLastStructType();
+            this.debugger.buildStructDbgInfo(indexedAccessType, structType);
             structType.setBody([largestType]);
             return structType;
         }
@@ -1566,7 +1615,6 @@ export class Visitor {
     }
 
     public visitTypeLiteral(typeLiteral: ts.TypeLiteralNode, scope: Scope) {
-        const structType = this.builder.buildStructType('');
         const propertyNames: string[] = [];
         const propertyTypes: llvm.Type[] = [];
         for (const member of typeLiteral.members) {
@@ -1575,7 +1623,10 @@ export class Visitor {
             propertyTypes.push(propertyType);
         }
 
+        const structName = this.builder.generateStructName(propertyNames);
+        const structType = this.builder.buildStructType(structName);
         this.builder.setProperty(structType, propertyTypes, propertyNames);
+        this.debugger.buildStructDbgInfo(typeLiteral, structType);
         return structType;
     }
 
@@ -1610,10 +1661,15 @@ export class Visitor {
 
         // Collect LLVM Type for each typeNode
         const types: llvm.Type[] = [];
+        const typeNames: string[] = []
         for (const typeNode of intersectionTypeNode.types) {
             const type = this.visitTypeNode(typeNode, scope);
+            const typeName = this.builder.resolveTypeName(type);
             types.push(type);
+            typeNames.push(typeName);
         }
+
+        const structName = this.builder.generateStructName(typeNames);
 
         // Merge all the struct types with their elements types into a new struct type
         // typeSet is used to temporarily hold disinct element types and make sure that the same type does not appear twice
@@ -1634,7 +1690,7 @@ export class Visitor {
         }
 
         const typeArray = Array.from(typeSet);
-        const structType = this.builder.buildStructType('');
+        const structType = this.builder.buildStructType(structName);
         structType.setBody(typeArray);
         return structType;
     }
@@ -1798,6 +1854,8 @@ export class Visitor {
             }
         }
 
+        this.debugger.buildStructDbgInfo(classDeclaration, structType);
+
         // Set the mappings of type parameter to (default) type under the current class declaration
         // so that it can look up the type with a type parameter name when visiting the other parts of the declaration. 
         Visitor.generics.addTypeParameters(typeParameterMap);
@@ -1824,8 +1882,6 @@ export class Visitor {
         }
 
         scope.enter(className);
-
-        this.debugger.buildClassDbgInfo(classDeclaration, structType);
 
         // Construct the information about each class property
         let properties: Property[] = [];
@@ -1857,7 +1913,10 @@ export class Visitor {
             const thisPtr = this.builder.buildPointerType(structType);
             this.builder.buildConstructor(`${className}_Constructor`, [thisPtr], ['this']);
             this.builder.buildReturn();
+            this.builder.setCurrentBlock(currentBlock);
         }
+
+        scope.resetBaseClassName();
 
         // Define all the class methods excluding constructors
         for (let methodDeclaration of methodDeclarations) {
@@ -1911,6 +1970,10 @@ export class Visitor {
 
     public visitMethodDeclaration(methodDeclaration: ts.MethodDeclaration, scope: Scope, specificTypes?: Type[]) {
 
+        let lastFunction = scope.getCurrentFunction();
+        let lastBlock = lastFunction.getEntryBlock();
+        if (!isBasicBlock(lastBlock)) throw new SyntaxNotSupportedError();
+
         // if (methodDeclaration.type === undefined) throw new SyntaxNotSupportedError();
         let methodName = this.visitPropertyName(methodDeclaration.name, scope);
 
@@ -1961,20 +2024,23 @@ export class Visitor {
         let diSubprogram: llvm.DISubprogram;
         if (methodDeclaration.body !== undefined) {
             fn = this.builder.buildClassMethod(`${className}_${methodName}`, returnType, parameterTypes, parameterNames);
-            diSubprogram = this.debugger.buildFunctionDbgInfo(fn, methodDeclaration);
             // Use the function name appropriately modified by LLVM
             scope.setDefaultValues(fn.name, defaultValues);
             // Change to a new scope
             scope.enter(methodName, fn);
             
             // In the current scope, initialize the parameter names of a function with the arguments received from a caller
+            let allocas: llvm.AllocaInst[] = [];
             for (let i = 0; i < parameterNames.length; i++) {
                 let arg = fn.getArguments()[i];
                 let newAlloca = this.builder.buildAlloca(arg.type);
                 this.builder.buildStore(arg, newAlloca);
                 scope.set(parameterNames[i], newAlloca);
                 this.builder.setType(parameterNames[i], arg.type);
+                allocas.push(newAlloca);
             }
+
+            diSubprogram = this.debugger.buildFunctionDbgInfo(fn, allocas, methodDeclaration);
 
             const modifiers = methodDeclaration.modifiers;
 
@@ -2016,17 +2082,25 @@ export class Visitor {
 
         } else {
             fn = this.builder.buildFunctionDeclaration(`${className}_${methodName}`, returnType, parameterTypes, parameterNames);
-            diSubprogram = this.debugger.buildFunctionDbgInfo(fn, methodDeclaration);
+            diSubprogram = this.debugger.buildFunctionDbgInfo(fn, undefined, methodDeclaration);
         }
 
         fn.setSubprogram(diSubprogram);
         this.debugger.leaveCurrentDIScope();
+        this.debugger.finalizeSubprogram(diSubprogram);
         this.builder.verifyFunction(fn);
+
+        this.builder.setCurrentBlock(lastBlock);
+
         return fn;
     }
 
     public visitConstructorDeclaration(constructorDeclaration: ts.ConstructorDeclaration, scope: Scope) {
         
+        let lastFunction = scope.getCurrentFunction();
+        let lastBlock = lastFunction.getEntryBlock();
+        if (!isBasicBlock(lastBlock)) throw new SyntaxNotSupportedError();
+
         let className = scope.getCurrentScopeName();
         let parameterTypes: Type[] = [];
         let parameterNames: string[] = [];
@@ -2053,15 +2127,16 @@ export class Visitor {
         parameterNames.unshift('this');
         let fn = this.builder.buildConstructor(`${className}_Constructor`, parameterTypes, parameterNames);
         // In the current scope, initialize the parameter names of a function with the arguments received from a caller
+        let allocas: llvm.AllocaInst[] = [];
         for (let i = 0; i < parameterNames.length; i++) {
             let arg = fn.getArguments()[i];
             let newAlloca = this.builder.buildAlloca(arg.type);
             this.builder.buildStore(arg, newAlloca);
             scope.set(parameterNames[i], newAlloca);
             this.builder.setType(parameterNames[i], arg.type);
+            allocas.push(newAlloca);
         }
-        const diSubprogram = this.debugger.buildFunctionDbgInfo(fn, constructorDeclaration);
-        fn.setSubprogram(diSubprogram);
+        // const diSubprogram = this.debugger.buildFunctionDbgInfo(fn, allocas, constructorDeclaration);
         // Use the function name appropriately modified by LLVM
         scope.setDefaultValues(`${className}_Constructor`, defaultValues);
         // Change to a new scope
@@ -2070,14 +2145,13 @@ export class Visitor {
         if (constructorDeclaration.body !== undefined) this.visitBlock(constructorDeclaration.body, scope);
         // Constructors should not return any values.
         this.builder.buildReturn()
+        // this.debugger.finalizeSubprogram(diSubprogram);
         this.builder.verifyFunction(fn);
-        this.debugger.leaveCurrentDIScope();
+        // this.debugger.leaveCurrentDIScope();
         // Return to the last scope
         scope.leave(fn);
-        let currentFunction = scope.getCurrentFunction();
-        let currentBlock = currentFunction.getEntryBlock();
-        if (!isBasicBlock(currentBlock)) throw new SyntaxNotSupportedError();
-        this.builder.setCurrentBlock(currentBlock);
+
+        this.builder.setCurrentBlock(lastBlock);
 
     }
 
@@ -2387,18 +2461,5 @@ export class Visitor {
         return type;
     }
 
-    private resolveTypeName(type: llvm.Type) {
-        if (type.isStructTy()) return type.name;
-        return type.toString();
-    }
-
-    private resolveValue(val: llvm.Value) {
-        let oldVal = val;
-        while (isAllocaInst(val)) {
-            oldVal = val;
-            val = this.builder.buildLoad(val);
-        }
-        return oldVal;
-    }
 }
 
