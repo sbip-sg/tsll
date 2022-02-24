@@ -1,6 +1,8 @@
-import llvm, { DIType, StructType } from '@lungchen/llvm-node';
+import llvm, { DIFlags, DILocalScope, DIType, LLVMContext, StructType } from '@lungchen/llvm-node';
 import ts from 'typescript';
 import { SyntaxNotSupportedError, TypeMismatchError, TypeUndefinedError } from '../../common/error';
+import { Builder } from './builder';
+import { isBasicBlock } from './types';
 
 export class Debugger {
     private builder: llvm.DIBuilder;
@@ -13,13 +15,18 @@ export class Debugger {
     private int8Type: llvm.DIBasicType | undefined;
     private typeMap: Map<string, llvm.DIType>; 
     private scopes: llvm.DIScope[];
+    private context: LLVMContext;
+    private irBuilder: Builder;
 
-    constructor(srcFile: ts.SourceFile, module: llvm.Module) {
+    constructor(srcFile: ts.SourceFile, irBuilder: Builder) {
+        const module = irBuilder.getModule();
+        this.irBuilder = irBuilder;
+        this.context = irBuilder.getContext();
         this.builder = new llvm.DIBuilder(module, true);
         this.srcFile = srcFile;
         this.file = this.builder.createFile(`${this.srcFile.fileName}.dbg`, '.');
         // For now, lang number is randomly chosen.
-        this.compileUnit = this.builder.createCompileUnit(0x0003, this.file, "tsll", false, "", 0);
+        this.compileUnit = this.builder.createCompileUnit(36, this.file, "tsll", false, "", 0);
         // The root scope is of DICompileUnit.
         this.scopes = [this.compileUnit];
         this.typeMap = new Map();
@@ -35,14 +42,17 @@ export class Debugger {
         return this.srcFile.getLineAndCharacterOfPosition(pos);
     }
 
-    public buildFunctionDbgInfo(func: llvm.Function, declaration?: ts.FunctionLikeDeclaration | ts.MethodSignature) {
+    public buildFunctionDbgInfo(func: llvm.Function, allocas?: llvm.AllocaInst[], declaration?: ts.FunctionLikeDeclaration | ts.MethodSignature) {
         let line = 0;
+        let column = 0;
         if (declaration !== undefined) {
             const location = this.getLocation(declaration);
             line = location.line;
+            column = location.character;
         }
 
         const args = func.getArguments();
+        const entryBlock = func.getEntryBlock();
 
         let elements: DIType[] = [];
         for (const arg of args) {
@@ -51,18 +61,21 @@ export class Debugger {
         }
 
         // The first element type is function return type;
-        const diType = this.getDIType(func.type);
+        const diType = this.getDIReturnType(func.type);
         elements.unshift(diType);
 
         const metadata = this.builder.getOrCreateTypeArray(elements);
         const subroutineType = this.builder.createSubroutineType(metadata);
         const subprogram = this.builder.createFunction(this.compileUnit, func.name, func.name, this.file, line, subroutineType, line);
         this.scopes.push(subprogram);
+        const diLocation = llvm.DILocation.get(subprogram.getContext(), line, column, subprogram);
 
         let argIdx = 0;
         for (const arg of args) {
             const diType = this.getDIType(arg.type);
-            this.builder.createParameterVariable(subprogram, arg.name, argIdx, this.file, line, diType);
+            const diLocalVar = this.builder.createParameterVariable(subprogram, arg.name, argIdx, this.file, line, diType);
+            const diExpression = this.builder.createExpression();
+            if (allocas !== undefined && isBasicBlock(entryBlock)) this.builder.insertDeclare(allocas[argIdx], diLocalVar, diExpression, diLocation, entryBlock);
             argIdx++;
         }
 
@@ -74,10 +87,9 @@ export class Debugger {
         const diExpression = this.builder.createExpression();
         const line = this.getLocation(node).line;
         const column = this.getLocation(node).character;
-        const context = value.getContext();
         const diType = this.getDIType(value.type);
-        const diLocalVar = this.builder.createAutoVariable(diScope, value.name, this.file, line, diType);
-        const diLocation = llvm.DILocation.get(context, line, column, diScope as llvm.DILocalScope)
+        const diLocalVar = this.builder.createAutoVariable(diScope as llvm.DILocalScope, value.name, this.file, line, diType);
+        const diLocation = llvm.DILocation.get(diScope.getContext(), line, column, diScope as llvm.DILocalScope);
         this.builder.insertDeclare(value, diLocalVar, diExpression, diLocation, currentBlock);
     }
 
@@ -87,7 +99,7 @@ export class Debugger {
 
     public leaveCurrentDIScope() {
         // It would be undefined behavior if the compile unit was removed.
-        if (this.scopes.length > 1) this.scopes.pop();
+        if (this.scopes.length > 2) this.scopes.pop();
     }
 
     public getDoubleType() {
@@ -131,12 +143,42 @@ export class Debugger {
     public getStructType(type: llvm.StructType) {
         if (type.name === undefined) throw new TypeUndefinedError('Type name undefined');
         const structType = this.typeMap.get(type.name);
-        if (structType === undefined) throw new TypeUndefinedError('Type not found');
+        if (structType === undefined) return this.getOpaqueType();
         return structType;
     }
 
-    public buildClassDbgInfo(classDeclaration: ts.ClassDeclaration, structType: llvm.StructType) {
-        const location = this.getLocation(classDeclaration);
+    public getOpaqueType() {
+        let typeName = 'Opaque';
+        let type = this.typeMap.get(typeName);
+        if (type === undefined) {
+            type = this.builder.createUnspecifiedType(typeName);
+            this.typeMap.set(typeName, type);
+        }
+        return type;
+    }
+
+    public getFunctionType() {
+        let typeName = 'Function';
+        let type = this.typeMap.get(typeName);
+        if (type === undefined) {
+            type = this.builder.createUnspecifiedType(typeName);
+            this.typeMap.set(typeName, type);
+        }
+        return type;
+    }
+
+    public getPointerType() {
+        let typeName = 'Pointer';
+        let type = this.typeMap.get(typeName);
+        if (type === undefined) {
+            type = this.builder.createUnspecifiedType(typeName);
+            this.typeMap.set(typeName, type);
+        }
+        return type;
+    }
+
+    public buildStructDbgInfo(node: ts.Node, structType: llvm.StructType) {
+        const location = this.getLocation(node);
 
         let derivedFrom: llvm.DIType | undefined;
         let elements: llvm.DIType[] = [];
@@ -148,8 +190,11 @@ export class Debugger {
             elements.push(diType);
 
             // The first element type could be a pointer type to an inherited struct type.
-            if (i === 0 && classDeclaration.heritageClauses !== undefined) derivedFrom = diType;
-
+            if (i === 0
+                && (ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node))
+                && node.heritageClauses !== undefined) {
+                    derivedFrom = diType;
+            }
         }
 
         if (derivedFrom === undefined) derivedFrom = this.builder.createUnspecifiedType('no_inheritance');
@@ -172,14 +217,21 @@ export class Debugger {
         return diCompositeType;
     }
 
-    public getDIType(type: llvm.Type) {
-        if (type.isPointerTy()) type = type.elementType;
+    public getDIReturnType(type: llvm.Type) {
         if (type.isFunctionTy()) type = type.returnType;
+        return this.getDIType(type);
+    }
+
+    public getDIType(type: llvm.Type) {
+        if (type.isPointerTy()) return this.getPointerType();
         if (type.isDoubleTy()) return this.getDoubleType();
         if (type.isIntegerTy(8)) return this.getInt8Type();
         if (type.isStructTy()) return this.getStructType(type);
         if (type.isVoidTy()) return this.getVoidType();
-        throw new TypeMismatchError('DIType not found');
+        if (type.isIntegerTy(1)) return this.getBooleanType();
+        if (type.isArrayTy()) return this.getOpaqueType();
+        if (type.isFunctionTy()) return this.getFunctionType();
+        return this.getOpaqueType();
     }
 
     public finalizeDI() {
