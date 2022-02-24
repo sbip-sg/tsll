@@ -15,6 +15,7 @@ export class Builder {
     private typeMap: Map<string, llvm.Type>;
     private functionMap: Map<string, llvm.Function>;
     private structElementNamesMap: Map<string, Array<string>>;
+    private namedFunctionMap: Map<string, Set<llvm.Function>>;
 
     constructor(moduleId: string) {
         this.llvmContext = new llvm.LLVMContext();
@@ -24,10 +25,15 @@ export class Builder {
         this.structElementNamesMap = new Map();
         this.typeMap = new Map();
         this.functionMap = new Map();
+        this.namedFunctionMap = new Map();
     }
 
     public getModule() {
         return this.llvmModule;
+    }
+
+    public getContext() {
+        return this.llvmContext;
     }
 
     public buildGlobalVariable(val: Value, name?: string) {
@@ -115,7 +121,7 @@ export class Builder {
     }
 
     public hasFunction(name: string) {
-        return this.llvmModule.getFunction(name) !== undefined || this.functionMap.has(name);
+        return this.getFunction(name) !== undefined || this.functionMap.has(name);
     }
 
     public getIntrinsic(name: string) {
@@ -154,7 +160,6 @@ export class Builder {
     }
 
     public buildFunction(name: string, returnType: Type, argTypes: Type[], argNames: string[]) {
-
         let fnType = llvm.FunctionType.get(returnType, argTypes, true);
         let fn = llvm.Function.create(fnType, llvm.LinkageTypes.ExternalLinkage, name, this.llvmModule);
 
@@ -167,6 +172,8 @@ export class Builder {
             arg.name = argNames[i];
             ++i;
         }
+
+        this.addNamedFunction(name, fn);
 
         return fn;
     }
@@ -390,6 +397,8 @@ export class Builder {
             args[i].name = paramNames[i];
         }
 
+        this.addNamedFunction(name, fn);
+
         return fn;
     }
 
@@ -401,6 +410,8 @@ export class Builder {
         for (let i = 0; i < paramNames.length; i++) {
             args[i].name = paramNames[i];
         }
+
+        this.addNamedFunction(name, fn);
 
         return fn;
     }
@@ -418,6 +429,8 @@ export class Builder {
             args[i].name = paramNames[i];
             ++i;
         } while (i < paramNames.length);
+
+        this.addNamedFunction(name, method);
 
         return method;
     }
@@ -500,6 +513,18 @@ export class Builder {
     }
 
     public getFunction(name: string) {
+        // const namedFucntionSet = this.namedFunctionMap.get(name);
+        // if (namedFucntionSet === undefined) return undefined;
+        // for (const namedFunction of namedFucntionSet) {
+        //     const parameters = namedFunction.getArguments();
+        //     const numParameters = parameters.length;
+        //     // for (let i = 0; i < numParameters; i++) {
+        //     //     const strA = parameters[i].type.toString();
+        //     //     const strB = paramTypes[i].
+        //     //     if (strA !== strB && strA !== 'void**') break;
+        //     // }
+        //     return namedFunction;
+        // }
         return this.llvmModule.getFunction(name) || this.functionMap.get(name);
     }
 
@@ -519,9 +544,43 @@ export class Builder {
         llvm.writeBitcodeToFile(this.llvmModule, filename);
     }
 
-    private resolveTypeName(type: Type) {
-        if (type.isStructTy()) return type.name;
-        return type.toString();
+    public resolveTypeName(type: llvm.Type) {
+        let typeName;
+        if (type.isStructTy()) {
+            typeName = type.name;
+        } else {
+            typeName = type.toString();
+        }
+
+        if (typeName === undefined) typeName = type.toString();
+
+        return typeName;
     }
 
+    public setCurrentDebugLocation(dl: llvm.DILocation) {
+        this.llvmBuilder.setCurrentDebugLocation(dl);
+    }
+
+    public generateStructName(names: string[]) {
+        let structName = '';
+        for (let i = 0; i < names.length; i++) {
+            structName += names[i];
+            if (i < names.length - 1) structName += '_';
+        }
+        return structName;
+    }
+
+    public generateFunctionName(name: string, paramTypes: llvm.Type[]) {
+        let functionName = name;
+        for (const paramType of paramTypes) {
+            functionName += '_' + this.resolveTypeName(paramType);
+        }
+        return functionName;
+    }
+
+    private addNamedFunction(name: string, fn: llvm.Function) {
+        if (!this.namedFunctionMap.has(name)) this.namedFunctionMap.set(name, new Set());
+        const functionSet = this.namedFunctionMap.get(name);
+        if (functionSet !== undefined) functionSet.add(fn);
+    }
 }
