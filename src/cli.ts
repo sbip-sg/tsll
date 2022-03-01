@@ -25,7 +25,10 @@ const argv = yargs(process.argv.slice(2)).options(options).help().string('_').ch
     const filePaths = argv._;
     if (filePaths.length === 0) throw new Error('At least one file should be provided.');
     const allExist = filePaths.every((filePath) => fs.existsSync(filePath as string));
-    return allExist;
+    if (!allExist) throw new Error('Filepath does not exist.');
+}).fail(msg => {
+    console.log(msg);
+    process.exit();
 }).parseSync();
 // convert a list of input files to IR or Bitcode file
 convert(argv._ as string[], argv.emitIR, argv.emitBitcode);
