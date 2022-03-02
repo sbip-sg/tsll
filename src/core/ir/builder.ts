@@ -16,6 +16,7 @@ export class Builder {
     private functionMap: Map<string, llvm.Function>;
     private structElementNamesMap: Map<string, Array<string>>;
     private namedFunctionMap: Map<string, Set<llvm.Function>>;
+    private inheritanceMap: Map<string, llvm.StructType>;
 
     constructor(moduleId: string) {
         this.llvmContext = new llvm.LLVMContext();
@@ -26,6 +27,7 @@ export class Builder {
         this.typeMap = new Map();
         this.functionMap = new Map();
         this.namedFunctionMap = new Map();
+        this.inheritanceMap = new Map();
     }
 
     public getModule() {
@@ -582,5 +584,13 @@ export class Builder {
         if (!this.namedFunctionMap.has(name)) this.namedFunctionMap.set(name, new Set());
         const functionSet = this.namedFunctionMap.get(name);
         if (functionSet !== undefined) functionSet.add(fn);
+    }
+
+    public buildInheritance(subType: llvm.StructType, superType: llvm.StructType) {
+        if (subType.name !== undefined) this.inheritanceMap.set(subType.name, superType);
+    }
+
+    public getInheritedType(subType: llvm.StructType) {
+        return subType.name !== undefined ? this.inheritanceMap.get(subType.name) : undefined;
     }
 }

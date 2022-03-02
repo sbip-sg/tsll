@@ -413,6 +413,7 @@ export class Visitor {
             if (baseClassName !== undefined) {
                 const baseStructType = this.builder.getStructType(baseClassName);
                 const baseStructPtrType = this.builder.buildPointerType(baseStructType);
+                thisValue = this.resolveVariableDefinition(thisValue, scope);
                 thisValue = this.builder.buildBitcast(thisValue, baseStructPtrType);
                 scope.resetBaseClassName();
             }
@@ -717,38 +718,40 @@ export class Visitor {
     }
 
     public visitImportDeclaration(importDeclaration: ts.ImportDeclaration, scope: Scope) {
-        // moduleSpecifier should be a string; otherwise it is a grammatical error.
-        const moduleSpecifier = importDeclaration.moduleSpecifier;
-        if (!ts.isStringLiteral(moduleSpecifier)) throw new SyntaxNotSupportedError();
+        // Ignore unnecessary imports into LLVM IR
+        return;
+        // // moduleSpecifier should be a string; otherwise it is a grammatical error.
+        // const moduleSpecifier = importDeclaration.moduleSpecifier;
+        // if (!ts.isStringLiteral(moduleSpecifier)) throw new SyntaxNotSupportedError();
+
+        // /**
+        //  * TODO: This name is used for naming declarations imported from the module.
+        //  */
+        // const moduleName = moduleSpecifier.text;
         
-        /**
-         * TODO: This name is used for naming declarations imported from the module.
-         */
-        const moduleName = moduleSpecifier.text;
-        
-        const importClause = importDeclaration.importClause;
-        // Simply return since only side effects will occur without importing anything.
-        if (importClause === undefined) return;
+        // const importClause = importDeclaration.importClause;
+        // // Simply return since only side effects will occur without importing anything.
+        // if (importClause === undefined) return;
 
-        const name = importClause.name;
-        if (name !== undefined) {
-            const declarations = scope.getDeclaration(name);
-            if (declarations !== undefined) declarations.every(declaration => this.visitDeclaration(declaration, scope));
-        }
+        // const name = importClause.name;
+        // if (name !== undefined) {
+        //     const declarations = scope.getDeclaration(name);
+        //     if (declarations !== undefined) declarations.every(declaration => this.visitDeclaration(declaration, scope));
+        // }
 
-        const namedBindings = importClause.namedBindings;
-        if (namedBindings !== undefined) {
-            if (ts.isNamedImports(namedBindings)) {
-                for (const element of namedBindings.elements) {
-                    const declarations = scope.getDeclaration(element.name);
-                    if (declarations !== undefined) declarations.every(declaration => this.visitDeclaration(declaration, scope));
-                }
-            }
+        // const namedBindings = importClause.namedBindings;
+        // if (namedBindings !== undefined) {
+        //     if (ts.isNamedImports(namedBindings)) {
+        //         for (const element of namedBindings.elements) {
+        //             const declarations = scope.getDeclaration(element.name);
+        //             if (declarations !== undefined) declarations.every(declaration => this.visitDeclaration(declaration, scope));
+        //         }
+        //     }
 
-            if (ts.isNamespaceImport(namedBindings)) {
-                // scope.storeImportedNamespace(moduleSpecifier, namedBindings.name.text);
-            }
-        }
+        //     if (ts.isNamespaceImport(namedBindings)) {
+        //         // scope.storeImportedNamespace(moduleSpecifier, namedBindings.name.text);
+        //     }
+        // }
     }
 
     public visitEnumDeclaration(enumDeclaration: ts.EnumDeclaration, scope: Scope) {
@@ -1423,10 +1426,25 @@ export class Visitor {
             visited = scope.get(visited);
             visited = this.resolveVariableDefinition(visited, scope);
 
+            let typeName = '';
+            let accessName = '';
+            let idx = -1;
             if (type.isPointerTy()) type = type.elementType;
             if (type.isStructTy() && type.name !== undefined) {
-                const accessName = `${type.name}_${propertyAccessExpression.name.text}`;
-                const idx = this.builder.findIndexInStruct(type, propertyAccessExpression.name.text);
+                const subclassIdx = this.builder.findIndexInStruct(type, propertyAccessExpression.name.text);
+                idx = subclassIdx;
+                typeName = type.name;
+                accessName = `${typeName}_${propertyAccessExpression.name.text}`;
+                if (!this.builder.hasFunction(accessName) && idx === -1) {
+                    const inheritedType = this.builder.getInheritedType(type);
+                    if (inheritedType !== undefined && inheritedType.name !== undefined) {
+                        const superclassIdx = this.builder.findIndexInStruct(inheritedType, propertyAccessExpression.name.text);
+                        idx = superclassIdx;
+                        typeName = inheritedType.name;
+                        accessName = `${typeName}_${propertyAccessExpression.name.text}`;
+                    }
+                }
+
                 if (idx !== -1) {
                     const offset1 = this.builder.buildInteger(0, 32);
                     const offset2 = this.builder.buildInteger(idx, 32);
@@ -1466,7 +1484,13 @@ export class Visitor {
         // Impossible to access an element of non-struct type
         if (!structType.isStructTy()) throw new SyntaxNotSupportedError();
         // Find the index of a specific name defined in the struct
-        const idx = this.builder.findIndexInStruct(structType, propertyAccessExpression.name.text);
+        let idx = this.builder.findIndexInStruct(structType, propertyAccessExpression.name.text);
+        // Find the index of extended struct type
+        const inheritedType = this.builder.getInheritedType(structType);
+        if (inheritedType !== undefined && idx === -1) {
+            idx = this.builder.findIndexInStruct(inheritedType, propertyAccessExpression.name.text);
+            visited = this.builder.buildBitcast(visited, this.builder.buildPointerType(inheritedType));
+        }
         // Cannot find an index, meaning that it could be a method name
         if (idx === -1) return `${structType.name}_${propertyAccessExpression.name.text}`;
         const offset2 = this.builder.buildInteger(idx, 32);
@@ -1872,7 +1896,8 @@ export class Visitor {
                         if (inheritedType.isPointerTy()) inheritedType = inheritedType.elementType;
                         if (inheritedType.isStructTy()) {
                             scope.resetBaseClassName(inheritedType.name);
-                            const inheritedPtrType = this.builder.buildPointerType(inheritedType)
+                            const inheritedPtrType = this.builder.buildPointerType(inheritedType);
+                            this.builder.buildInheritance(structType, inheritedType);
                             inheritedTypes.push(inheritedPtrType);
                             if (inheritedType.name !== undefined) inheritedNames.push(inheritedType.name);
                         }
