@@ -1,3 +1,9 @@
+/**
+ * The main purpose of Debugger is to wrap the functionality served by LLVM, being a bit abstract.
+ * This wrapper will help with maintainability and reliability whenever major changes of LLVM API may
+ * cause broken code. In general, it uses DIBuilder to build up debug information metadata and attach the debug
+ * info to the target IR instruction.
+ */
 import llvm, { DIFlags, DILocalScope, DIType, LLVMContext, StructType } from '@lungchen/llvm-node';
 import ts from 'typescript';
 import { SyntaxNotSupportedError, TypeMismatchError, TypeUndefinedError } from '../../common/error';
