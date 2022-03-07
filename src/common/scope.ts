@@ -1,3 +1,6 @@
+/**
+ * Scope is to control the state of variables in any scope.
+ */
 import { FunctionUndefinedError, SyntaxNotSupportedError, TypeUndefinedError, VariableUndefinedError } from "./error";
 import { Value, Function, Type } from "../core/ir/types";
 import ts from "typescript";

@@ -36,6 +36,10 @@ For those who would like to develop this project together, please check out belo
 
 ## Code Style
 This project is developed generally with [Typescript style guide](https://google.github.io/styleguide/tsguide.html) to attain better maintainability and readability.
+
+## Project Structure
+All of the code is located in the **src** directory. Under **src/core** are the core components **Visitor**, **Builder**, and **Debugger** included. These three pillars are combined with the common utilites under **src/common** for Tsll to work as a compiler frontend. **src/cli.ts** and **src/converter.ts** are basically the entry point to the compiler.
+
 ## References
 A list of resources regarding LLVM and Typescript Compiler API documentation is provided below so that you can get started with this project to contribute if you will.
 - https://github.com/microsoft/TypeScript/blob/d8e830d132a464ec63fd122ec50b1bb1781d16b7/doc/spec-ARCHIVED.md

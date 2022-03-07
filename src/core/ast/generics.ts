@@ -1,3 +1,9 @@
+/**
+ * This module helps to store generic types which have not been visited
+ * due to its lacking knowledge of real type parameters. Once all the type parameters are well defined,
+ * type references can be replaced with them while a generic type is being visited, which
+ * was originally defined with merely these references.
+ */
 import llvm from "@lungchen/llvm-node";
 import { TypeUndefinedError } from "../../common/error";
 import { Scope } from "../../common/scope";

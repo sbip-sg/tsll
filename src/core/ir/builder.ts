@@ -1,3 +1,9 @@
+/**
+ * The main purpose of Builder is to wrap the functionality served by LLVM, being a bit abstract.
+ * This wrapper will help with maintainability and reliability whenever major changes of LLVM API may
+ * cause broken code. In general, it uses IRBuilder and other utility functions
+ * to build up IR instructions.
+ */
 import llvm, { CallInst, ConstantInt, PointerType, StructType } from '@lungchen/llvm-node';
 import { FunctionUndefinedError, SyntaxNotSupportedError, TypeUndefinedError } from "../../common/error";
 import { Generics } from '../ast/generics';
